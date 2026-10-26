@@ -134,10 +134,19 @@ process.on('unhandledRejection', (reason) => {
 });
 
 // Start Server
-app.listen(PORT, () => {
+app.listen(PORT, async () => {
   console.log(`============================================================`);
   console.log(` Gold Pawn ERP Node.js Backend Server Running `);
   console.log(` Port: ${PORT}`);
   console.log(` Base URL: http://localhost:${PORT}`);
   console.log(`============================================================`);
+
+  // Auto-initialize Database Connection & Tables Schema on Server Startup
+  try {
+    const { getPool } = require('./config/database');
+    await getPool();
+    console.log(`[DATABASE SUCCESS] Connected to MySQL and all tables verified/created.`);
+  } catch (err) {
+    console.error(`[DATABASE ERROR] Automatic table creation failed: ${err.message}`);
+  }
 });

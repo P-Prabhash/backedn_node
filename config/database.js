@@ -5,7 +5,7 @@ let pool = null;
 let schemaInitialized = false;
 
 async function getPool() {
-  if (pool) return pool;
+  if (pool && schemaInitialized) return pool;
 
   const dbHost = process.env.DB_HOST || '127.0.0.1';
   const dbPort = parseInt(process.env.DB_PORT || '3306', 10);
@@ -13,32 +13,58 @@ async function getPool() {
   const dbPass = process.env.DB_PASS !== undefined ? process.env.DB_PASS : '';
   const dbName = process.env.DB_NAME || 'backend_api';
 
-  // Step 1: Connect to MySQL Server without specifying DB to ensure DB exists
-  const tempConnection = await mysql.createConnection({
-    host: dbHost,
-    port: dbPort,
-    user: dbUser,
-    password: dbPass,
-  });
+  // Determine SSL requirement for cloud databases like Aiven MySQL
+  const isRemote = dbHost && !['127.0.0.1', 'localhost', '0.0.0.0'].includes(dbHost);
+  const sslEnv = (process.env.DB_SSL || '').toLowerCase();
+  const useSsl = sslEnv === 'true' || sslEnv === '1' || (sslEnv !== 'false' && sslEnv !== '0' && isRemote);
 
-  await tempConnection.query(
-    `CREATE DATABASE IF NOT EXISTS \`${dbName}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci`
-  );
-  await tempConnection.end();
+  const sslOptions = useSsl ? {
+    rejectUnauthorized: process.env.DB_SSL_REJECT_UNAUTHORIZED === 'true'
+  } : undefined;
 
-  // Step 2: Create connection pool to backend_api
-  pool = mysql.createPool({
-    host: dbHost,
-    port: dbPort,
-    user: dbUser,
-    password: dbPass,
-    database: dbName,
-    waitForConnections: true,
-    connectionLimit: 10,
-    queueLimit: 0,
-  });
+  // Step 1: Connect to MySQL Server without specifying DB to ensure DB exists (skip if cloud permissions prevent it)
+  try {
+    const tempConfig = {
+      host: dbHost,
+      port: dbPort,
+      user: dbUser,
+      password: dbPass,
+      connectTimeout: 10000,
+    };
+    if (sslOptions) {
+      tempConfig.ssl = sslOptions;
+    }
 
-  // Step 3: Ensure Schema Initialized
+    const tempConnection = await mysql.createConnection(tempConfig);
+    await tempConnection.query(
+      `CREATE DATABASE IF NOT EXISTS \`${dbName}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci`
+    );
+    await tempConnection.end();
+  } catch (err) {
+    console.warn(`[DATABASE NOTICE] Database auto-creation check skipped: ${err.message}. Connecting directly to database '${dbName}'...`);
+  }
+
+  // Step 2: Create connection pool to target database
+  if (!pool) {
+    const poolConfig = {
+      host: dbHost,
+      port: dbPort,
+      user: dbUser,
+      password: dbPass,
+      database: dbName,
+      waitForConnections: true,
+      connectionLimit: 10,
+      queueLimit: 0,
+      connectTimeout: 10000,
+    };
+    if (sslOptions) {
+      poolConfig.ssl = sslOptions;
+    }
+
+    pool = mysql.createPool(poolConfig);
+  }
+
+  // Step 3: Ensure Schema & Tables are initialized automatically
   if (!schemaInitialized) {
     await ensureSchema(pool);
     schemaInitialized = true;
@@ -49,11 +75,7 @@ async function getPool() {
 
 async function ensureSchema(dbPool) {
   try {
-    const [rows] = await dbPool.query("SHOW TABLES LIKE 'users'");
-    if (rows.length > 0) {
-      await ensureUserColumns(dbPool);
-      return;
-    }
+    console.log('[DATABASE] Checking and initializing database tables schema...');
 
     const ddlQueries = [
       `CREATE TABLE IF NOT EXISTS users (
@@ -106,6 +128,7 @@ async function ensureSchema(dbPool) {
         purity VARCHAR(20) NOT NULL DEFAULT '22K',
         weight DECIMAL(8,3) NOT NULL,
         remarks TEXT NULL,
+        locker_no VARCHAR(50) DEFAULT NULL,
         photo_url VARCHAR(255) NULL,
         status ENUM('AVAILABLE', 'PLEDGED', 'RELEASED', 'PARTIALLY_RELEASED') DEFAULT 'AVAILABLE',
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -183,6 +206,8 @@ async function ensureSchema(dbPool) {
         customer_id INT NOT NULL,
         payment_type ENUM('NORMAL', 'PARTIAL', 'FINAL_SETTLEMENT', 'RELEASE_PAYMENT') DEFAULT 'PARTIAL',
         amount DECIMAL(12,2) NOT NULL,
+        manual_interest DECIMAL(12,2) NOT NULL DEFAULT 0.00,
+        total_received DECIMAL(12,2) NOT NULL DEFAULT 0.00,
         payment_date DATE NOT NULL,
         payment_time TIME NOT NULL,
         payment_mode ENUM('CASH', 'BANK_TRANSFER', 'UPI', 'CHEQUE') DEFAULT 'CASH',
@@ -216,6 +241,7 @@ async function ensureSchema(dbPool) {
         loan_id INT NOT NULL,
         customer_id INT NOT NULL,
         payment_id INT NULL,
+        release_type VARCHAR(50) NOT NULL DEFAULT 'PARTIAL',
         total_weight_released DECIMAL(8,3) NOT NULL,
         release_date DATE NOT NULL,
         release_time TIME NOT NULL,
@@ -487,12 +513,17 @@ async function ensureSchema(dbPool) {
     ];
 
     for (const sql of ddlQueries) {
-      await dbPool.query(sql);
+      try {
+        await dbPool.query(sql);
+      } catch (sqlErr) {
+        console.warn(`[DATABASE DDL WARNING] ${sqlErr.message}`);
+      }
     }
 
     await ensureUserColumns(dbPool);
+    console.log('[DATABASE] All tables and schemas verified and initialized successfully.');
   } catch (err) {
-    console.error("Database Schema Error:", err.message);
+    console.error("[DATABASE] Schema initialization error:", err.message);
   }
 }
 

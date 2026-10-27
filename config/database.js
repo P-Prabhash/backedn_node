@@ -551,6 +551,29 @@ async function ensureSchema(dbPool) {
 
     await ensureUserColumns(dbPool);
 
+    // Auto-seed default Admin user if no Admin user exists in the database
+    try {
+      const [userRows] = await dbPool.query("SELECT id FROM users WHERE role = 'ADMIN' LIMIT 1");
+      if (userRows.length === 0) {
+        const bcrypt = require('bcryptjs');
+        const defaultHash = bcrypt.hashSync('admin123', 10);
+        const [adminInsert] = await dbPool.query(
+          `INSERT INTO users (username, password_hash, full_name, role, status, created_at, updated_at)
+           VALUES ('admin', ?, 'System Administrator', 'ADMIN', 'ACTIVE', NOW(), NOW())`,
+          [defaultHash]
+        );
+
+        const adminId = adminInsert.insertId;
+        const [roles] = await dbPool.query("SELECT id FROM roles WHERE role_code = 'ADMIN'");
+        if (roles.length > 0) {
+          await dbPool.query("INSERT IGNORE INTO user_roles (user_id, role_id, assigned_by) VALUES (?, ?, ?)", [adminId, roles[0].id, adminId]);
+        }
+        console.log('[DATABASE] Successfully seeded default Admin account (Username: admin | Password: admin123)');
+      }
+    } catch (adminErr) {
+      console.warn(`[DATABASE SEED WARNING] Default admin seeding: ${adminErr.message}`);
+    }
+
     console.log(
       '[DATABASE] All tables and schemas verified and initialized successfully.'
     );

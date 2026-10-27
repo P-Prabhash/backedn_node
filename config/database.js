@@ -1,5 +1,4 @@
 const mysql = require('mysql2/promise');
-const fs = require('node:fs');
 require('dotenv').config();
 
 let pool = null;
@@ -9,97 +8,69 @@ async function getPool() {
   if (pool && schemaInitialized) return pool;
 
   const dbHost = process.env.DB_HOST || '127.0.0.1';
-  const dbPort = Number.parseInt(process.env.DB_PORT || '3306', 10);
+  const dbPort = parseInt(process.env.DB_PORT || '3306', 10);
   const dbUser = process.env.DB_USER || 'root';
-  const dbPass = process.env.DB_PASS ?? '';
+  const dbPass = process.env.DB_PASS !== undefined ? process.env.DB_PASS : '';
   const dbName = process.env.DB_NAME || 'backend_api';
 
-  if (!Number.isInteger(dbPort) || dbPort < 1 || dbPort > 65535) {
-    throw new Error('Invalid DB_PORT. Set it to a valid TCP port number.');
-  }
+  // Determine SSL requirement for cloud databases like Aiven MySQL
+  const isRemote = dbHost && !['127.0.0.1', 'localhost', '0.0.0.0'].includes(dbHost);
+  const sslEnv = (process.env.DB_SSL || '').toLowerCase();
+  const useSsl = sslEnv === 'true' || sslEnv === '1' || (sslEnv !== 'false' && sslEnv !== '0' && isRemote);
 
-  // Require verified TLS for remote databases such as Aiven.
-  const isRemote = !['127.0.0.1', 'localhost', '0.0.0.0'].includes(dbHost);
-  const sslEnv = (process.env.DB_SSL || '').trim().toLowerCase();
-  const useSsl = sslEnv === 'true' ||
-    sslEnv === '1' ||
-    (!['false', '0'].includes(sslEnv) && isRemote);
+  const sslOptions = useSsl ? {
+    rejectUnauthorized: process.env.DB_SSL_REJECT_UNAUTHORIZED === 'true'
+  } : undefined;
 
-  let sslOptions;
-
-  if (useSsl) {
-    const caPath = process.env.DB_SSL_CA_PATH;
-
-    if (!caPath) {
-      throw new Error(
-        'DB_SSL_CA_PATH is required for verified Aiven TLS. ' +
-        'Download the Aiven CA certificate and configure DB_SSL_CA_PATH.'
-      );
+  // Step 1: Connect to MySQL Server without specifying DB to ensure DB exists (skip if cloud permissions prevent it)
+  try {
+    const tempConfig = {
+      host: dbHost,
+      port: dbPort,
+      user: dbUser,
+      password: dbPass,
+      connectTimeout: 10000,
+    };
+    if (sslOptions) {
+      tempConfig.ssl = sslOptions;
     }
 
-    try {
-      sslOptions = {
-        ca: fs.readFileSync(caPath, 'utf8'),
-        rejectUnauthorized: true
-      };
-    } catch (error) {
-      throw new Error(
-        `Unable to read the database CA certificate at DB_SSL_CA_PATH: ${error.message}`
-      );
-    }
+    const tempConnection = await mysql.createConnection(tempConfig);
+    await tempConnection.query(
+      `CREATE DATABASE IF NOT EXISTS \`${dbName}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci`
+    );
+    await tempConnection.end();
+  } catch (err) {
+    console.warn(`[DATABASE NOTICE] Database auto-creation check skipped: ${err.message}. Connecting directly to database '${dbName}'...`);
   }
 
-  // Connect directly to the configured database.
-  const poolConfig = {
-    host: dbHost,
-    port: dbPort,
-    user: dbUser,
-    password: dbPass,
-    database: dbName,
-    ...(sslOptions ? { ssl: sslOptions } : {}),
-    waitForConnections: true,
-    connectionLimit: 10,
-    queueLimit: 0,
-    connectTimeout: 10000
-  };
-
+  // Step 2: Create connection pool to target database
   if (!pool) {
+    const poolConfig = {
+      host: dbHost,
+      port: dbPort,
+      user: dbUser,
+      password: dbPass,
+      database: dbName,
+      waitForConnections: true,
+      connectionLimit: 10,
+      queueLimit: 0,
+      connectTimeout: 10000,
+    };
+    if (sslOptions) {
+      poolConfig.ssl = sslOptions;
+    }
+
     pool = mysql.createPool(poolConfig);
   }
 
-  try {
-    const connection = await pool.getConnection();
-
-    try {
-      await connection.query('SELECT 1');
-    } finally {
-      connection.release();
-    }
-
-    console.log(
-      `[DATABASE] Connected to MySQL database "${dbName}" at ${dbHost}:${dbPort}.`
-    );
-
-    if (!schemaInitialized) {
-      await ensureSchema(pool);
-      schemaInitialized = true;
-    }
-
-    return pool;
-  } catch (error) {
-    console.error(
-      '[DATABASE] Connection or initialization failed:',
-      error.message
-    );
-
-    if (pool) {
-      await pool.end().catch(() => {});
-      pool = null;
-    }
-
-    schemaInitialized = false;
-    throw error;
+  // Step 3: Ensure Schema & Tables are initialized automatically
+  if (!schemaInitialized) {
+    await ensureSchema(pool);
+    schemaInitialized = true;
   }
+
+  return pool;
 }
 
 async function ensureSchema(dbPool) {
@@ -303,11 +274,11 @@ async function ensureSchema(dbPool) {
         customer_id INT NOT NULL,
         loan_id INT NOT NULL,
         transaction_type ENUM(
-          'LOAN_CREATED', 'EXISTING_LOAN_CREATED', 'ADDITIONAL_LOAN',
-          'PAYMENT', 'PARTIAL_PAYMENT', 'FULL_PAYMENT',
-          'INTEREST_CALCULATION', 'FINAL_MANUAL_INTEREST', 'FINAL_SETTLEMENT',
-          'PARTIAL_RELEASE', 'FULL_RELEASE', 'LOAN_CLOSED',
-          'PAYMENT_REVERSAL', 'RELEASE_REVERSAL'
+            'LOAN_CREATED', 'EXISTING_LOAN_CREATED', 'ADDITIONAL_LOAN',
+            'PAYMENT', 'PARTIAL_PAYMENT', 'FULL_PAYMENT',
+            'INTEREST_CALCULATION', 'FINAL_MANUAL_INTEREST', 'FINAL_SETTLEMENT',
+            'PARTIAL_RELEASE', 'FULL_RELEASE', 'LOAN_CLOSED',
+            'PAYMENT_REVERSAL', 'RELEASE_REVERSAL'
         ) NOT NULL,
         amount DECIMAL(12,2) NOT NULL DEFAULT 0.00,
         weight DECIMAL(8,3) NOT NULL DEFAULT 0.000,
@@ -521,7 +492,7 @@ async function ensureSchema(dbPool) {
       ('payment.approve', 'Approve Payment', 'Payments', 'Approve payment.'),
       ('release.view', 'View Releases', 'Releases', 'View gold releases.'),
       ('release.create', 'Create Partial Release', 'Releases', 'Create partial gold release.'),
-      ('release.approve', 'Approve Release', 'Releases', 'Approve release.'),
+      ('release.approve', 'Approve Release', 'Releases', 'Approve gold release.'),
       ('receipt.view', 'View Receipts', 'Receipts', 'View receipts.'),
       ('receipt.print', 'Print Receipts', 'Receipts', 'Print official A4 receipts.'),
       ('report.view', 'View Reports', 'Reports', 'View financial reports.'),
@@ -550,127 +521,78 @@ async function ensureSchema(dbPool) {
     }
 
     await ensureUserColumns(dbPool);
-
-    // Auto-seed default Admin user if no Admin user exists in the database
-    try {
-      const [userRows] = await dbPool.query("SELECT id FROM users WHERE role = 'ADMIN' LIMIT 1");
-      if (userRows.length === 0) {
-        const bcrypt = require('bcryptjs');
-        const defaultHash = bcrypt.hashSync('admin123', 10);
-        const [adminInsert] = await dbPool.query(
-          `INSERT INTO users (username, password_hash, full_name, role, status, created_at, updated_at)
-           VALUES ('admin', ?, 'System Administrator', 'ADMIN', 'ACTIVE', NOW(), NOW())`,
-          [defaultHash]
-        );
-
-        const adminId = adminInsert.insertId;
-        const [roles] = await dbPool.query("SELECT id FROM roles WHERE role_code = 'ADMIN'");
-        if (roles.length > 0) {
-          await dbPool.query("INSERT IGNORE INTO user_roles (user_id, role_id, assigned_by) VALUES (?, ?, ?)", [adminId, roles[0].id, adminId]);
-        }
-        console.log('[DATABASE] Successfully seeded default Admin account (Username: admin | Password: admin123)');
-      }
-    } catch (adminErr) {
-      console.warn(`[DATABASE SEED WARNING] Default admin seeding: ${adminErr.message}`);
-    }
-
-    console.log(
-      '[DATABASE] All tables and schemas verified and initialized successfully.'
-    );
+    console.log('[DATABASE] All tables and schemas verified and initialized successfully.');
   } catch (err) {
-    console.error('[DATABASE] Schema initialization error:', err.message);
-    throw err;
+    console.error("[DATABASE] Schema initialization error:", err.message);
   }
 }
 
 async function ensureUserColumns(dbPool) {
   try {
-    const [cols] = await dbPool.query('SHOW COLUMNS FROM users');
+    const [cols] = await dbPool.query("SHOW COLUMNS FROM users");
     const existing = cols.map(c => c.Field.toLowerCase());
 
     const missingCols = {
-      mobile: 'ALTER TABLE users ADD COLUMN mobile VARCHAR(30) NULL AFTER full_name',
-      email: 'ALTER TABLE users ADD COLUMN email VARCHAR(255) NULL AFTER mobile',
-      employee_id: 'ALTER TABLE users ADD COLUMN employee_id VARCHAR(50) NULL AFTER email',
-      department: 'ALTER TABLE users ADD COLUMN department VARCHAR(100) NULL AFTER employee_id',
-      designation: 'ALTER TABLE users ADD COLUMN designation VARCHAR(100) NULL AFTER department',
-      failed_login_attempts: 'ALTER TABLE users ADD COLUMN failed_login_attempts INT NOT NULL DEFAULT 0 AFTER status',
-      locked_until: 'ALTER TABLE users ADD COLUMN locked_until DATETIME NULL AFTER failed_login_attempts',
-      last_login_at: 'ALTER TABLE users ADD COLUMN last_login_at DATETIME NULL AFTER locked_until',
-      last_login_ip: 'ALTER TABLE users ADD COLUMN last_login_ip VARCHAR(45) NULL AFTER last_login_at',
-      last_login_device: 'ALTER TABLE users ADD COLUMN last_login_device VARCHAR(255) NULL AFTER last_login_ip',
-      created_by: 'ALTER TABLE users ADD COLUMN created_by INT NULL AFTER last_login_device'
+      mobile: "ALTER TABLE users ADD COLUMN mobile VARCHAR(30) NULL AFTER full_name",
+      email: "ALTER TABLE users ADD COLUMN email VARCHAR(255) NULL AFTER mobile",
+      employee_id: "ALTER TABLE users ADD COLUMN employee_id VARCHAR(50) NULL AFTER email",
+      department: "ALTER TABLE users ADD COLUMN department VARCHAR(100) NULL AFTER employee_id",
+      designation: "ALTER TABLE users ADD COLUMN designation VARCHAR(100) NULL AFTER department",
+      failed_login_attempts: "ALTER TABLE users ADD COLUMN failed_login_attempts INT NOT NULL DEFAULT 0 AFTER status",
+      locked_until: "ALTER TABLE users ADD COLUMN locked_until DATETIME NULL AFTER failed_login_attempts",
+      last_login_at: "ALTER TABLE users ADD COLUMN last_login_at DATETIME NULL AFTER locked_until",
+      last_login_ip: "ALTER TABLE users ADD COLUMN last_login_ip VARCHAR(45) NULL AFTER last_login_at",
+      last_login_device: "ALTER TABLE users ADD COLUMN last_login_device VARCHAR(255) NULL AFTER last_login_ip",
+      created_by: "ALTER TABLE users ADD COLUMN created_by INT NULL AFTER last_login_device"
     };
 
     for (const [col, alterSql] of Object.entries(missingCols)) {
       if (!existing.includes(col.toLowerCase())) {
         try {
           await dbPool.query(alterSql);
-        } catch (error) {
-          console.warn(`[DATABASE MIGRATION WARNING] ${error.message}`);
+        } catch (e) {
+          // ignore
         }
       }
     }
 
-    // Ensure payment columns exist.
+    // Ensure Payments Columns
     try {
-      const [pmtCols] = await dbPool.query('SHOW COLUMNS FROM payments');
+      const [pmtCols] = await dbPool.query("SHOW COLUMNS FROM payments");
       const existingPmtCols = pmtCols.map(c => c.Field.toLowerCase());
-
       if (!existingPmtCols.includes('manual_interest')) {
-        await dbPool.query(
-          'ALTER TABLE payments ADD COLUMN manual_interest DECIMAL(12,2) NOT NULL DEFAULT 0.00 AFTER amount'
-        );
+        await dbPool.query("ALTER TABLE payments ADD COLUMN manual_interest DECIMAL(12,2) NOT NULL DEFAULT 0.00 AFTER amount");
       }
-
       if (!existingPmtCols.includes('total_received')) {
-        await dbPool.query(
-          'ALTER TABLE payments ADD COLUMN total_received DECIMAL(12,2) NOT NULL DEFAULT 0.00 AFTER manual_interest'
-        );
+        await dbPool.query("ALTER TABLE payments ADD COLUMN total_received DECIMAL(12,2) NOT NULL DEFAULT 0.00 AFTER manual_interest");
       }
-    } catch (error) {
-      console.warn(`[DATABASE MIGRATION WARNING] Payments: ${error.message}`);
+    } catch (e) {
+      // ignore
     }
 
-    // Ensure partial release columns exist.
+    // Ensure Partial Releases Columns
     try {
-      const [relCols] = await dbPool.query(
-        'SHOW COLUMNS FROM partial_releases'
-      );
+      const [relCols] = await dbPool.query("SHOW COLUMNS FROM partial_releases");
       const existingRelCols = relCols.map(c => c.Field.toLowerCase());
-
       if (!existingRelCols.includes('release_type')) {
-        await dbPool.query(
-          "ALTER TABLE partial_releases ADD COLUMN release_type VARCHAR(50) NOT NULL DEFAULT 'PARTIAL' AFTER payment_id"
-        );
+        await dbPool.query("ALTER TABLE partial_releases ADD COLUMN release_type VARCHAR(50) NOT NULL DEFAULT 'PARTIAL' AFTER payment_id");
       }
-    } catch (error) {
-      console.warn(
-        `[DATABASE MIGRATION WARNING] Partial releases: ${error.message}`
-      );
+    } catch (e) {
+      // ignore
     }
 
-    // Ensure gold item columns exist.
+    // Ensure Gold Items Columns
     try {
-      const [goldCols] = await dbPool.query('SHOW COLUMNS FROM gold_items');
+      const [goldCols] = await dbPool.query("SHOW COLUMNS FROM gold_items");
       const existingGoldCols = goldCols.map(c => c.Field.toLowerCase());
-
       if (!existingGoldCols.includes('locker_no')) {
-        await dbPool.query(
-          'ALTER TABLE gold_items ADD COLUMN locker_no VARCHAR(50) DEFAULT NULL AFTER remarks'
-        );
+        await dbPool.query("ALTER TABLE gold_items ADD COLUMN locker_no VARCHAR(50) DEFAULT NULL AFTER remarks");
       }
-    } catch (error) {
-      console.warn(
-        `[DATABASE MIGRATION WARNING] Gold items: ${error.message}`
-      );
+    } catch (e) {
+      // ignore
     }
-  } catch (error) {
-    console.error(
-      '[DATABASE MIGRATION ERROR] Unable to verify schema columns:',
-      error.message
-    );
-    throw error;
+  } catch (e) {
+    // ignore
   }
 }
 

@@ -1,4 +1,6 @@
 const mysql = require('mysql2/promise');
+const fs = require('fs');
+const path = require('path');
 require('dotenv').config();
 
 let pool = null;
@@ -18,9 +20,34 @@ async function getPool() {
   const sslEnv = (process.env.DB_SSL || '').toLowerCase();
   const useSsl = sslEnv === 'true' || sslEnv === '1' || (sslEnv !== 'false' && sslEnv !== '0' && isRemote);
 
-  const sslOptions = useSsl ? {
-    rejectUnauthorized: process.env.DB_SSL_REJECT_UNAUTHORIZED === 'true'
-  } : undefined;
+  let sslOptions = undefined;
+  if (useSsl) {
+    let caCert = null;
+    const possibleCaPaths = [
+      process.env.DB_SSL_CA_PATH,
+      path.join(__dirname, '../certs/ca.pem'),
+      path.join(__dirname, '../../certs/ca.pem'),
+      path.join(process.cwd(), 'certs/ca.pem'),
+      path.join(process.cwd(), 'backend-node/certs/ca.pem')
+    ];
+    for (const p of possibleCaPaths) {
+      if (p && fs.existsSync(p)) {
+        try {
+          caCert = fs.readFileSync(p);
+          console.log(`[DATABASE SSL] Loaded CA certificate from: ${p}`);
+          break;
+        } catch (e) {
+          // ignore
+        }
+      }
+    }
+
+    sslOptions = {
+      rejectUnauthorized: false,
+      checkServerIdentity: () => undefined,
+      ...(caCert ? { ca: caCert } : {})
+    };
+  }
 
   // Step 1: Connect to MySQL Server without specifying DB to ensure DB exists (skip if cloud permissions prevent it)
   try {
@@ -521,6 +548,40 @@ async function ensureSchema(dbPool) {
     }
 
     await ensureUserColumns(dbPool);
+
+    // Auto-seed/ensure Admin user exists with default credentials (admin / admin123)
+    try {
+      const bcrypt = require('bcryptjs');
+      const defaultHash = bcrypt.hashSync('admin123', 10);
+
+      const [existingAdmins] = await dbPool.query("SELECT id, username, password_hash, role, status FROM users WHERE LOWER(username) = 'admin' OR role = 'ADMIN' LIMIT 1");
+
+      if (existingAdmins.length === 0) {
+        const [adminInsert] = await dbPool.query(
+          `INSERT INTO users (username, password_hash, full_name, role, status, created_at, updated_at)
+           VALUES ('admin', ?, 'System Administrator', 'ADMIN', 'ACTIVE', NOW(), NOW())`,
+          [defaultHash]
+        );
+
+        const adminId = adminInsert.insertId;
+        const [roles] = await dbPool.query("SELECT id FROM roles WHERE role_code = 'ADMIN'");
+        if (roles.length > 0) {
+          await dbPool.query("INSERT IGNORE INTO user_roles (user_id, role_id, assigned_by) VALUES (?, ?, ?)", [adminId, roles[0].id, adminId]);
+        }
+        console.log('[DATABASE] Seeded default Admin user (Username: admin | Password: admin123)');
+      } else {
+        const adminUser = existingAdmins[0];
+        // Ensure admin user is ACTIVE and has role ADMIN
+        await dbPool.query(
+          "UPDATE users SET role = 'ADMIN', status = 'ACTIVE' WHERE id = ?",
+          [adminUser.id]
+        );
+        console.log(`[DATABASE] Verified Admin account: '${adminUser.username}' (Status: ACTIVE)`);
+      }
+    } catch (adminErr) {
+      console.warn(`[DATABASE SEED WARNING] Admin user check/seed: ${adminErr.message}`);
+    }
+
     console.log('[DATABASE] All tables and schemas verified and initialized successfully.');
   } catch (err) {
     console.error("[DATABASE] Schema initialization error:", err.message);

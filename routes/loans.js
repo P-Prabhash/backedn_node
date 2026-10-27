@@ -161,22 +161,46 @@ router.get(['/get', '/get.php'], requirePermission('loan.view'), async (req, res
   }
 });
 
+function toSqlDate(val) {
+  if (!val) return null;
+  const str = String(val).trim();
+  if (!str || str === 'null' || str === 'undefined' || str === '0000-00-00') return null;
+  if (str.includes('T')) return str.split('T')[0];
+  if (str.includes(' ')) return str.split(' ')[0];
+  return str;
+}
+
 // ============================================================
 // SHARED LOAN CREATOR (NEW & EXISTING HISTORICAL LOANS)
 // ============================================================
 async function handleCreateLoan(req, res, defaultLoanType = 'NEW_LOAN') {
   const customerId = parseInt(req.body.customer_id || '0', 10);
   const manualLoanNo = String(req.body.manual_loan_no || '').trim();
-  const openedDate = String(req.body.opened_date || req.body.manual_opened_date || '').trim() || new Date().toISOString().split('T')[0];
-  const closedDate = String(req.body.closed_date || req.body.manual_closed_date || '').trim() || null;
+  const openedDate = toSqlDate(req.body.opened_date || req.body.manual_opened_date || req.body.date) || new Date().toISOString().split('T')[0];
+  const closedDate = toSqlDate(req.body.closed_date || req.body.manual_closed_date);
   const principalAmount = parseFloat(req.body.principal_amount || '0');
   const monthlyRate = parseFloat(req.body.monthly_interest_rate || '2.0');
   const initialInterest = parseFloat(req.body.initial_interest || req.body.manual_interest || req.body.total_interest || '0');
   const totalPaid = parseFloat(req.body.total_paid || '0');
-  const status = String(req.body.status || 'ACTIVE').trim().toUpperCase();
+
+  let status = String(req.body.status || 'ACTIVE').trim().toUpperCase();
+  if (!['ACTIVE', 'CLOSED', 'PARTIALLY_PAID', 'PARTIALLY_RELEASED'].includes(status)) {
+    status = 'ACTIVE';
+  }
+
   const remarks = String(req.body.remarks || '').trim();
   const items = req.body.items || req.body.gold_item_ids || [];
-  const loanType = String(req.body.loan_type || defaultLoanType).trim().toUpperCase();
+
+  let loanType = String(req.body.loan_type || defaultLoanType).trim().toUpperCase();
+  if (!['NEW_LOAN', 'EXISTING_LOAN', 'ADDITIONAL_LOAN'].includes(loanType)) {
+    if (loanType.includes('EXISTING')) {
+      loanType = 'EXISTING_LOAN';
+    } else if (loanType.includes('ADDITIONAL')) {
+      loanType = 'ADDITIONAL_LOAN';
+    } else {
+      loanType = 'NEW_LOAN';
+    }
+  }
 
   if (customerId <= 0) {
     return res.status(422).json({ success: false, message: 'Valid customer ID is required.' });
@@ -187,9 +211,10 @@ async function handleCreateLoan(req, res, defaultLoanType = 'NEW_LOAN') {
   }
 
   const db = await getPool();
-  const conn = await db.getConnection();
+  let conn = null;
 
   try {
+    conn = await db.getConnection();
     await conn.beginTransaction();
 
     const [custRows] = await conn.query('SELECT * FROM customers WHERE id = ?', [customerId]);
@@ -256,17 +281,24 @@ async function handleCreateLoan(req, res, defaultLoanType = 'NEW_LOAN') {
         let goldItemId = 0;
         let pledgedWeight = 0;
 
-        if (typeof item === 'object' && item.gold_item_id) {
-          goldItemId = parseInt(item.gold_item_id, 10);
-          pledgedWeight = parseFloat(item.pledged_weight || item.weight || '0');
-        } else if (typeof item === 'object' && item.item_name) {
-          const [gRes] = await conn.query(
-            `INSERT INTO gold_items (customer_id, item_name, purity, weight, remarks, status)
-             VALUES (?, ?, ?, ?, ?, 'PLEDGED')`,
-            [customerId, item.item_name, item.purity || '22K', item.weight, item.remarks || null]
-          );
-          goldItemId = gRes.insertId;
-          pledgedWeight = parseFloat(item.weight || '0');
+        if (typeof item === 'object' && item !== null) {
+          if (item.gold_item_id) {
+            goldItemId = parseInt(item.gold_item_id, 10);
+            pledgedWeight = parseFloat(item.pledged_weight || item.weight || '0');
+          } else if (item.item_name) {
+            const itemName = String(item.item_name || 'Gold Item').trim();
+            const purity = String(item.purity || '22K').trim();
+            const weightVal = parseFloat(item.weight || item.pledged_weight || '0') || 0;
+            const itemRemarks = item.remarks ? String(item.remarks).trim() : null;
+
+            const [gRes] = await conn.query(
+              `INSERT INTO gold_items (customer_id, item_name, purity, weight, remarks, status)
+               VALUES (?, ?, ?, ?, ?, 'PLEDGED')`,
+              [customerId, itemName, purity, weightVal, itemRemarks]
+            );
+            goldItemId = gRes.insertId;
+            pledgedWeight = weightVal;
+          }
         } else {
           goldItemId = parseInt(item, 10);
         }
@@ -342,16 +374,19 @@ async function handleCreateLoan(req, res, defaultLoanType = 'NEW_LOAN') {
     });
 
   } catch (err) {
-    await conn.rollback();
-    conn.release();
+    if (conn) {
+      try { await conn.rollback(); } catch (rErr) {}
+      try { conn.release(); } catch (rErr) {}
+    }
+    console.error('[CREATE LOAN ERROR]', err);
     return res.status(500).json({ success: false, message: 'Failed to record loan: ' + err.message, error: err.message });
   }
 }
 
 // ============================================================
-// POST /loans/create_new (.php)
+// POST /loans/create (.php), /loans/create_new (.php)
 // ============================================================
-router.post(['/create_new', '/create_new.php'], requirePermission('loan.create'), async (req, res) => {
+router.post(['/create', '/create.php', '/create_new', '/create_new.php'], requirePermission('loan.create'), async (req, res) => {
   return handleCreateLoan(req, res, 'NEW_LOAN');
 });
 

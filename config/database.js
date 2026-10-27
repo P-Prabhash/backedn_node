@@ -1,4 +1,6 @@
 const mysql = require('mysql2/promise');
+const fs = require('fs');
+const path = require('path');
 require('dotenv').config();
 
 let pool = null;
@@ -18,9 +20,34 @@ async function getPool() {
   const sslEnv = (process.env.DB_SSL || '').toLowerCase();
   const useSsl = sslEnv === 'true' || sslEnv === '1' || (sslEnv !== 'false' && sslEnv !== '0' && isRemote);
 
-  const sslOptions = useSsl ? {
-    rejectUnauthorized: process.env.DB_SSL_REJECT_UNAUTHORIZED === 'true'
-  } : undefined;
+  let sslOptions = undefined;
+  if (useSsl) {
+    let caCert = null;
+    const possibleCaPaths = [
+      process.env.DB_SSL_CA_PATH,
+      path.join(__dirname, '../certs/ca.pem'),
+      path.join(__dirname, '../../certs/ca.pem'),
+      path.join(process.cwd(), 'certs/ca.pem'),
+      path.join(process.cwd(), 'backend-node/certs/ca.pem')
+    ];
+    for (const p of possibleCaPaths) {
+      if (p && fs.existsSync(p)) {
+        try {
+          caCert = fs.readFileSync(p);
+          console.log(`[DATABASE SSL] Loaded CA certificate from: ${p}`);
+          break;
+        } catch (e) {
+          // ignore
+        }
+      }
+    }
+
+    sslOptions = {
+      rejectUnauthorized: false,
+      checkServerIdentity: () => undefined,
+      ...(caCert ? { ca: caCert } : {})
+    };
+  }
 
   // Step 1: Connect to MySQL Server without specifying DB to ensure DB exists (skip if cloud permissions prevent it)
   try {

@@ -189,7 +189,21 @@ async function handleCreateLoan(req, res, defaultLoanType = 'NEW_LOAN') {
   }
 
   const remarks = String(req.body.remarks || '').trim();
-  const items = req.body.items || req.body.gold_item_ids || [];
+
+  let items = req.body.items || req.body.gold_item_ids || req.body.gold_items || [];
+  if (typeof items === 'string') {
+    try {
+      items = JSON.parse(items);
+    } catch (e) {
+      if (items.includes(',')) {
+        items = items.split(',').map(s => s.trim());
+      } else if (items.trim()) {
+        items = [items.trim()];
+      } else {
+        items = [];
+      }
+    }
+  }
 
   let loanType = String(req.body.loan_type || defaultLoanType).trim().toUpperCase();
   if (!['NEW_LOAN', 'EXISTING_LOAN', 'ADDITIONAL_LOAN'].includes(loanType)) {

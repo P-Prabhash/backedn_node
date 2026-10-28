@@ -98,8 +98,8 @@ router.post(['/create_partial', '/create_partial.php'], requirePermission('relea
           const w = parseFloat(goldObj.weight || 0);
           totalReleasedWeight += w;
 
-          await conn.query('UPDATE gold_items SET status = "RELEASED" WHERE id = ?', [goldItemId]);
-          await conn.query('UPDATE loan_gold_items SET status = "RELEASED", released_weight = pledged_weight, release_date = ? WHERE loan_id = ? AND gold_item_id = ?', [releaseDate, loanId, goldItemId]);
+          await conn.query("UPDATE gold_items SET status = 'RELEASED' WHERE id = ?", [goldItemId]);
+          await conn.query("UPDATE loan_gold_items SET status = 'RELEASED', released_weight = pledged_weight, release_date = ? WHERE loan_id = ? AND gold_item_id = ?", [releaseDate, loanId, goldItemId]);
 
           releasedDetails.push(goldObj);
         }

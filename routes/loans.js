@@ -324,7 +324,7 @@ async function handleCreateLoan(req, res, defaultLoanType = 'NEW_LOAN') {
             const goldObj = gi[0];
             if (pledgedWeight <= 0) pledgedWeight = parseFloat(goldObj.weight || 0);
 
-            await conn.query('UPDATE gold_items SET status = "PLEDGED" WHERE id = ?', [goldItemId]);
+            await conn.query("UPDATE gold_items SET status = 'PLEDGED' WHERE id = ?", [goldItemId]);
             await conn.query(
               `INSERT INTO loan_gold_items (loan_id, gold_item_id, pledged_weight, status, pledge_date)
                VALUES (?, ?, ?, 'PLEDGED', ?)`,
@@ -438,7 +438,7 @@ router.post(['/create_additional', '/create_additional.php'], requirePermission(
     await conn.beginTransaction();
 
     // 1. Verify Customer
-    const [custRows] = await conn.query('SELECT * FROM customers WHERE id = ? AND status = "ACTIVE" LIMIT 1', [customerId]);
+    const [custRows] = await conn.query("SELECT * FROM customers WHERE id = ? AND status = 'ACTIVE' LIMIT 1", [customerId]);
     if (custRows.length === 0) {
       await conn.rollback();
       conn.release();
@@ -504,7 +504,7 @@ router.post(['/create_additional', '/create_additional.php'], requirePermission(
              VALUES (?, ?, ?, 0.000, 'PLEDGED', ?)`,
             [loanId, item.id, item.weight, openedDate]
           );
-          await conn.query('UPDATE gold_items SET status = "PLEDGED" WHERE id = ? AND customer_id = ?', [item.id, customerId]);
+          await conn.query("UPDATE gold_items SET status = 'PLEDGED' WHERE id = ? AND customer_id = ?", [item.id, customerId]);
         }
       }
     }
@@ -732,17 +732,17 @@ router.post(['/close', '/close.php'], requirePermission('loan.close'), async (re
       closedDate = new Date().toISOString().split('T')[0];
       loanStatus = 'CLOSED';
 
-      const [pledgedCollateral] = await conn.query('SELECT * FROM loan_gold_items WHERE loan_id = ? AND status = "PLEDGED"', [loanId]);
+      const [pledgedCollateral] = await conn.query("SELECT * FROM loan_gold_items WHERE loan_id = ? AND status = 'PLEDGED'", [loanId]);
       let totalReleasedAtClosure = 0;
 
       for (const col of pledgedCollateral) {
-        await conn.query('UPDATE loan_gold_items SET status = "RELEASED", release_date = ? WHERE id = ?', [closedDate, col.id]);
-        await conn.query('UPDATE gold_items SET status = "RELEASED" WHERE id = ?', [col.gold_item_id]);
+        await conn.query("UPDATE loan_gold_items SET status = 'RELEASED', release_date = ? WHERE id = ?", [closedDate, col.id]);
+        await conn.query("UPDATE gold_items SET status = 'RELEASED' WHERE id = ?", [col.gold_item_id]);
         totalReleasedAtClosure += parseFloat(col.pledged_weight || 0);
       }
 
       // Automatic Full Release Record Creation
-      const [existingRel] = await conn.query('SELECT id FROM partial_releases WHERE loan_id = ? AND release_type = "FULL" LIMIT 1', [loanId]);
+      const [existingRel] = await conn.query("SELECT id FROM partial_releases WHERE loan_id = ? AND release_type = 'FULL' LIMIT 1", [loanId]);
       if (existingRel.length === 0) {
         const autoReleaseNo = 'REL-' + new Date().toISOString().slice(0,10).replace(/-/g,'') + '-' + Math.random().toString(36).substring(2,7).toUpperCase();
         await conn.query(

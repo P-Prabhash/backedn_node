@@ -172,8 +172,8 @@ router.post(['/create', '/create.php'], requirePermission('payment.create'), asy
               [releaseId, pItem.gold_item_id, pItem.item_name, pItem.purity, pItem.weight]
             );
 
-            await conn.query('UPDATE loan_gold_items SET status = "RELEASED", released_weight = pledged_weight, release_date = ? WHERE id = ?', [paymentDate, pItem.id]);
-            await conn.query('UPDATE gold_items SET status = "RELEASED" WHERE id = ?', [pItem.gold_item_id]);
+            await conn.query("UPDATE loan_gold_items SET status = 'RELEASED', released_weight = pledged_weight, release_date = ? WHERE id = ?", [paymentDate, pItem.id]);
+            await conn.query("UPDATE gold_items SET status = 'RELEASED' WHERE id = ?", [pItem.gold_item_id]);
           }
 
           const txCode = 'TXN-REL-' + Date.now() + '-' + Math.floor(Math.random() * 1000);

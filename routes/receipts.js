@@ -101,12 +101,6 @@ function enrichReceiptPayload(req, data, loan, customer, payment, collateral) {
     collateral: formattedCollateral
   };
 }
-    current_payment: currentPayment,
-    total_paid: totalPaid,
-    remaining_balance: remaining,
-    collateral: (collateral && collateral.length > 0) ? collateral : (data.collateral || data.gold_items || [])
-  };
-}
 
 // ============================================================
 // GET /receipts/get (.php) & GET /receipts/:receiptId

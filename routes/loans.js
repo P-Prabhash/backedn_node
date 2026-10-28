@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const { getPool } = require('../config/database');
 const { requirePermission } = require('../middleware/authMiddleware');
+const { formatPhotoUrl } = require('../utils/imageHelper');
 
 async function logTransaction(db, customerId, loanId, txType, amount, weight, refId, remarks, createdBy = 'STAFF') {
   const code = 'TXN-' + Date.now() + '-' + Math.floor(Math.random() * 1000);
@@ -66,6 +67,10 @@ router.get(['/list', '/list.php'], requirePermission('loan.view'), async (req, r
 
     const [loans] = await db.query(sql, params);
 
+    for (const l of loans) {
+      l.customer_photo = formatPhotoUrl(req, l.customer_photo);
+    }
+
     return res.json({
       success: true,
       count: loans.length,
@@ -109,7 +114,7 @@ router.get(['/get', '/get.php'], requirePermission('loan.view'), async (req, res
       mobile: loan.mobile,
       address: loan.address,
       aadhaar_number: loan.aadhaar_number,
-      photo_url: loan.customer_photo_url || ''
+      photo_url: formatPhotoUrl(req, loan.customer_photo_url)
     };
 
     const [collateral] = await db.query(`
@@ -126,6 +131,8 @@ router.get(['/get', '/get.php'], requirePermission('loan.view'), async (req, res
     let totalPledgedWeight = 0;
     let totalReleasedWeight = 0;
     for (const c of collateral) {
+      c.photo_url = formatPhotoUrl(req, c.photo_url);
+      c.gold_photo_url = formatPhotoUrl(req, c.photo_url || c.gold_photo_url);
       totalPledgedWeight += parseFloat(c.pledged_weight || c.weight || 0);
       totalReleasedWeight += parseFloat(c.released_weight || 0);
     }

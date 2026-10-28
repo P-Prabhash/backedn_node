@@ -4,35 +4,36 @@ const fs = require('fs');
 const path = require('path');
 const upload = require('../middleware/uploadMiddleware');
 const { authenticate } = require('../middleware/authMiddleware');
+const { formatPhotoUrl } = require('../utils/imageHelper');
 
 // ============================================================
 // POST /upload (.php) /upload.php
 // ============================================================
 router.post(['/', '/upload.php', '/image', '/image.php'], authenticate, (req, res, next) => {
-  // Try multer upload first for multipart forms, but catch error if it's JSON base64
-  upload.single('photo')(req, res, (err) => {
+  upload.any()(req, res, (err) => {
     if (err) {
-      // If multer fails due to non-multipart form, proceed to base64 handler
-      return next();
+      console.warn('[UPLOAD WARNING]', err.message);
     }
     next();
   });
 }, (req, res) => {
   // 1. Check Multer File Upload
-  if (req.file) {
+  const uploadedFile = (req.files && req.files.length > 0) ? req.files[0] : req.file;
+
+  if (uploadedFile) {
     let folder = req.query.folder || req.body.folder || req.body.type || 'customers';
     folder = String(folder).trim().toLowerCase();
     if (folder === 'customer') folder = 'customers';
     if (folder === 'gold_item' || folder === 'golditem') folder = 'gold';
 
-    const photoUrl = `uploads/${folder}/${req.file.filename}`;
+    const photoUrl = formatPhotoUrl(req, `uploads/${folder}/${uploadedFile.filename}`);
 
     return res.json({
       success: true,
       message: 'File uploaded successfully.',
       photo_url: photoUrl,
       url: photoUrl,
-      filename: req.file.filename,
+      filename: uploadedFile.filename,
       data: {
         photo_url: photoUrl,
         url: photoUrl
@@ -75,7 +76,7 @@ router.post(['/', '/upload.php', '/image', '/image.php'], authenticate, (req, re
       const filePath = path.join(targetDir, filename);
 
       fs.writeFileSync(filePath, buffer);
-      const photoUrl = `uploads/${folder}/${filename}`;
+      const photoUrl = formatPhotoUrl(req, `uploads/${folder}/${filename}`);
 
       return res.json({
         success: true,

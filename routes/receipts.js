@@ -2,8 +2,9 @@ const express = require('express');
 const router = express.Router();
 const { getPool } = require('../config/database');
 const { requirePermission } = require('../middleware/authMiddleware');
+const { formatPhotoUrl } = require('../utils/imageHelper');
 
-function enrichReceiptPayload(data, loan, customer, payment, collateral) {
+function enrichReceiptPayload(req, data, loan, customer, payment, collateral) {
   const currentPayment = parseFloat(
     payment ? payment.amount :
     (data.current_payment || data.payment_amount || data.amount || data.amount_paid || (data.financial ? data.financial.current_payment : 0))
@@ -46,7 +47,7 @@ function enrichReceiptPayload(data, loan, customer, payment, collateral) {
     name: customer ? customer.name : (data.customer ? (data.customer.name || data.customer.full_name) : (data.customer_name || '')),
     mobile: customer ? customer.mobile : (data.customer ? data.customer.mobile : (data.mobile || '')),
     address: customer ? customer.address : (data.customer ? data.customer.address : (data.address || '')),
-    photo_url: customer ? customer.photo_url : (data.customer ? data.customer.photo_url : '')
+    photo_url: formatPhotoUrl(req, customer ? customer.photo_url : (data.customer ? data.customer.photo_url : ''))
   };
 
   const fin = {
@@ -60,6 +61,12 @@ function enrichReceiptPayload(data, loan, customer, payment, collateral) {
     remaining_balance: remaining,
     payment_mode: paymentMode
   };
+
+  const formattedCollateral = ((collateral && collateral.length > 0) ? collateral : (data.collateral || data.gold_items || [])).map(c => ({
+    ...c,
+    photo_url: formatPhotoUrl(req, c.photo_url || c.gold_photo_url),
+    gold_photo_url: formatPhotoUrl(req, c.photo_url || c.gold_photo_url)
+  }));
 
   return {
     ...data,
@@ -88,6 +95,12 @@ function enrichReceiptPayload(data, loan, customer, payment, collateral) {
     principal_amount: principal,
     total_due: totalDue,
     previous_paid: previousPaid,
+    current_payment: currentPayment,
+    total_paid: totalPaid,
+    remaining_balance: remaining,
+    collateral: formattedCollateral
+  };
+}
     current_payment: currentPayment,
     total_paid: totalPaid,
     remaining_balance: remaining,
@@ -187,7 +200,7 @@ router.get(['/get', '/get.php', '/:receiptId'], requirePermission('receipt.view'
       }
     }
 
-    const enriched = enrichReceiptPayload(dataJson, loan, customer, payment, collateral);
+    const enriched = enrichReceiptPayload(req, dataJson, loan, customer, payment, collateral);
 
     return res.json({
       success: true,

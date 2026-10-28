@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const { getPool } = require('../config/database');
 const { requirePermission } = require('../middleware/authMiddleware');
+const { formatPhotoUrl } = require('../utils/imageHelper');
 
 // ============================================================
 // GET /customers/list (.php)
@@ -59,6 +60,10 @@ router.get(['/list', '/list.php'], requirePermission('customer.view'), async (re
 
     const [customers] = await db.query(query, params);
 
+    for (const c of customers) {
+      c.photo_url = formatPhotoUrl(req, c.photo_url);
+    }
+
     return res.json({
       success: true,
       count: customers.length,
@@ -86,8 +91,12 @@ router.get(['/get', '/get.php'], requirePermission('customer.view'), async (req,
       return res.status(404).json({ success: false, message: 'Customer not found' });
     }
     const customer = custRows[0];
+    customer.photo_url = formatPhotoUrl(req, customer.photo_url);
 
     const [goldItems] = await db.query('SELECT * FROM gold_items WHERE customer_id = ? ORDER BY id DESC', [id]);
+    for (const g of goldItems) {
+      g.photo_url = formatPhotoUrl(req, g.photo_url);
+    }
 
     const [loans] = await db.query(`
       SELECT l.*,
@@ -198,7 +207,7 @@ router.post(['/create', '/create.php'], requirePermission('customer.create'), as
   const address = String(req.body.address || '').trim();
   const aadhaar = String(req.body.aadhaar_number || req.body.aadhaar || '').trim();
   const pan = String(req.body.pan_number || req.body.pan || '').trim();
-  const photoUrl = String(req.body.photo_url || '').trim();
+  const photoUrl = formatPhotoUrl(req, req.body.photo_url || req.body.photo || req.body.image_url);
 
   if (!name || !mobile || !address) {
     return res.status(422).json({ success: false, message: 'Name, mobile and address are required.' });
@@ -233,6 +242,7 @@ router.post(['/create', '/create.php'], requirePermission('customer.create'), as
     );
 
     const [created] = await db.query('SELECT * FROM customers WHERE id = ?', [insertRes.insertId]);
+    created[0].photo_url = formatPhotoUrl(req, created[0].photo_url);
 
     return res.status(201).json({
       success: true,
@@ -254,7 +264,7 @@ router.post(['/update', '/update.php'], requirePermission('customer.edit'), asyn
   const address = String(req.body.address || '').trim();
   const aadhaar = String(req.body.aadhaar_number || req.body.aadhaar || '').trim();
   const pan = String(req.body.pan_number || req.body.pan || '').trim();
-  const photoUrl = String(req.body.photo_url || '').trim();
+  const photoUrl = formatPhotoUrl(req, req.body.photo_url || req.body.photo || req.body.image_url);
 
   if (id <= 0) {
     return res.status(400).json({ success: false, message: 'Customer ID is required.' });
@@ -279,6 +289,7 @@ router.post(['/update', '/update.php'], requirePermission('customer.edit'), asyn
     );
 
     const [updated] = await db.query('SELECT * FROM customers WHERE id = ?', [id]);
+    updated[0].photo_url = formatPhotoUrl(req, updated[0].photo_url);
 
     return res.json({
       success: true,
@@ -308,6 +319,7 @@ router.get(['/search_additional', '/search_additional.php'], requirePermission('
           c.mobile,
           c.address,
           c.aadhaar_number,
+          c.photo_url,
           COUNT(DISTINCT l.id) AS existing_loans_count,
           COALESCE(SUM(DISTINCT CASE WHEN g.status = 'AVAILABLE' THEN g.weight ELSE 0 END), 0) AS available_gold_weight
       FROM customers c
@@ -326,6 +338,10 @@ router.get(['/search_additional', '/search_additional.php'], requirePermission('
     sql += ` GROUP BY c.id ORDER BY c.name ASC LIMIT 50`;
 
     const [rows] = await db.query(sql, params);
+
+    for (const r of rows) {
+      r.photo_url = formatPhotoUrl(req, r.photo_url);
+    }
 
     return res.json({
       success: true,

@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const { getPool } = require('../config/database');
 const { requirePermission } = require('../middleware/authMiddleware');
+const { formatPhotoUrl } = require('../utils/imageHelper');
 
 // ============================================================
 // GET /gold/list (.php)
@@ -18,6 +19,7 @@ router.get(['/list', '/list.php'], requirePermission('gold.view'), async (req, r
              c.name AS customer_name,
              c.customer_code,
              c.mobile,
+             c.photo_url AS customer_photo,
              l.loan_no,
              l.id AS loan_id,
              COALESCE(
@@ -52,6 +54,11 @@ router.get(['/list', '/list.php'], requirePermission('gold.view'), async (req, r
 
     const [items] = await db.query(sql, params);
 
+    for (const g of items) {
+      g.photo_url = formatPhotoUrl(req, g.photo_url);
+      g.customer_photo = formatPhotoUrl(req, g.customer_photo);
+    }
+
     return res.json({
       success: true,
       count: items.length,
@@ -71,7 +78,7 @@ router.post(['/create', '/create.php', '/add', '/add.php'], requirePermission('g
   const purity = String(req.body.purity || '22K').trim();
   const weight = parseFloat(req.body.weight || '0');
   const remarks = String(req.body.remarks || '').trim();
-  const photoUrl = String(req.body.photo_url || '').trim();
+  const photoUrl = formatPhotoUrl(req, req.body.photo_url || req.body.photo || req.body.image_url);
   const lockerNo = String(req.body.locker_no || '').trim();
 
   if (customerId <= 0) {
@@ -95,6 +102,20 @@ router.post(['/create', '/create.php', '/add', '/add.php'], requirePermission('g
       return res.status(404).json({ success: false, message: 'Customer not found.' });
     }
 
+    // Deduplication check: check if same item with customer_id, item_name, weight was inserted in last 10s
+    const [recentDup] = await db.query(
+      `SELECT * FROM gold_items WHERE customer_id = ? AND LOWER(item_name) = LOWER(?) AND ABS(weight - ?) < 0.001 AND created_at >= NOW() - INTERVAL 10 SECOND LIMIT 1`,
+      [customerId, itemName, weight]
+    );
+    if (recentDup.length > 0) {
+      recentDup[0].photo_url = formatPhotoUrl(req, recentDup[0].photo_url);
+      return res.status(200).json({
+        success: true,
+        message: 'Gold item already recorded.',
+        data: recentDup[0]
+      });
+    }
+
     const [insertRes] = await db.query(
       `INSERT INTO gold_items (customer_id, item_name, purity, weight, remarks, photo_url, locker_no, status)
        VALUES (?, ?, ?, ?, ?, ?, ?, 'AVAILABLE')`,
@@ -102,6 +123,7 @@ router.post(['/create', '/create.php', '/add', '/add.php'], requirePermission('g
     );
 
     const [created] = await db.query('SELECT * FROM gold_items WHERE id = ?', [insertRes.insertId]);
+    created[0].photo_url = formatPhotoUrl(req, created[0].photo_url);
 
     return res.status(201).json({
       success: true,
@@ -122,7 +144,7 @@ router.post(['/update', '/update.php'], requirePermission('gold.edit'), async (r
   const purity = String(req.body.purity || '').trim();
   const weight = parseFloat(req.body.weight || '0');
   const remarks = String(req.body.remarks || '').trim();
-  const photoUrl = String(req.body.photo_url || '').trim();
+  const photoUrl = formatPhotoUrl(req, req.body.photo_url || req.body.photo || req.body.image_url);
   const lockerNo = String(req.body.locker_no || '').trim();
 
   if (id <= 0) {
@@ -142,6 +164,7 @@ router.post(['/update', '/update.php'], requirePermission('gold.edit'), async (r
     );
 
     const [updated] = await db.query('SELECT * FROM gold_items WHERE id = ?', [id]);
+    updated[0].photo_url = formatPhotoUrl(req, updated[0].photo_url);
 
     return res.json({
       success: true,
@@ -168,6 +191,10 @@ router.get(['/available_for_additional', '/available_for_additional.php'], requi
       `SELECT * FROM gold_items WHERE customer_id = ? AND status = 'AVAILABLE' ORDER BY id DESC`,
       [customerId]
     );
+
+    for (const g of items) {
+      g.photo_url = formatPhotoUrl(req, g.photo_url);
+    }
 
     return res.json({
       success: true,

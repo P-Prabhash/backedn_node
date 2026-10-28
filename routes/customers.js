@@ -208,9 +208,17 @@ router.post(['/create', '/create.php'], requirePermission('customer.create'), as
     const db = await getPool();
 
     // Check duplicate mobile
-    const [existing] = await db.query('SELECT id FROM customers WHERE mobile = ? LIMIT 1', [mobile]);
-    if (existing.length > 0) {
+    const [existingMobile] = await db.query('SELECT id FROM customers WHERE mobile = ? LIMIT 1', [mobile]);
+    if (existingMobile.length > 0) {
       return res.status(409).json({ success: false, message: 'Mobile number already registered to another customer.' });
+    }
+
+    // Check duplicate Aadhaar if provided
+    if (aadhaar) {
+      const [existingAadhaar] = await db.query('SELECT id FROM customers WHERE aadhaar_number = ? LIMIT 1', [aadhaar]);
+      if (existingAadhaar.length > 0) {
+        return res.status(409).json({ success: false, message: 'Aadhaar number already registered to another customer.' });
+      }
     }
 
     // Auto-generate customer code CUST-1001

@@ -75,6 +75,7 @@ const uploadRoutes = require('./routes/upload');
 const backupRoutes = require('./routes/backup');
 const seedRoutes = require('./routes/seed');
 const testWorkflowRoutes = require('./routes/test_workflow');
+const docsRoutes = require('./routes/docs');
 
 // ============================================================
 // MOUNT ROUTERS
@@ -96,6 +97,7 @@ app.use(['/upload', '/upload.php'], uploadRoutes);
 app.use('/backup', backupRoutes);
 app.use(['/seed', '/seed.php'], seedRoutes);
 app.use(['/test_workflow', '/test_workflow.php'], testWorkflowRoutes);
+app.use(['/api-docs', '/docs', '/swagger.json'], docsRoutes);
 
 // Health check endpoint
 app.get(['/', '/health'], (req, res) => {

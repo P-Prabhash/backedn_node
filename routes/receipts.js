@@ -96,10 +96,16 @@ function enrichReceiptPayload(data, loan, customer, payment, collateral) {
 }
 
 // ============================================================
-// GET /receipts/get (.php)
+// GET /receipts/get (.php) & GET /receipts/:receiptId
 // ============================================================
-router.get(['/get', '/get.php'], requirePermission('receipt.view'), async (req, res) => {
-  const receiptNo = String(req.query.receipt_no || req.query.no || '').trim();
+router.get(['/get', '/get.php', '/:receiptId'], requirePermission('receipt.view'), async (req, res) => {
+  const paramId = req.params.receiptId ? String(req.params.receiptId).trim() : '';
+  let receiptNo = String(req.query.receipt_no || req.query.no || '').trim();
+
+  if (!receiptNo && paramId && paramId !== 'get' && paramId !== 'get.php') {
+    receiptNo = paramId;
+  }
+
   const paymentId = parseInt(req.query.payment_id || '0', 10);
   const releaseId = parseInt(req.query.release_id || '0', 10);
   const loanId = parseInt(req.query.loan_id || '0', 10);
@@ -112,8 +118,13 @@ router.get(['/get', '/get.php'], requirePermission('receipt.view'), async (req, 
     const params = [];
 
     if (receiptNo) {
-      sql += ' AND receipt_no = ?';
-      params.push(receiptNo);
+      if (/^\d+$/.test(receiptNo)) {
+        sql += ' AND (id = ? OR receipt_no = ?)';
+        params.push(parseInt(receiptNo, 10), receiptNo);
+      } else {
+        sql += ' AND receipt_no = ?';
+        params.push(receiptNo);
+      }
     } else if (paymentId > 0) {
       sql += " AND reference_id = ? AND receipt_type = 'PAYMENT'";
       params.push(String(paymentId));

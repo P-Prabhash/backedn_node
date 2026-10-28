@@ -174,14 +174,14 @@ function toSqlDate(val) {
 // SHARED LOAN CREATOR (NEW & EXISTING HISTORICAL LOANS)
 // ============================================================
 async function handleCreateLoan(req, res, defaultLoanType = 'NEW_LOAN') {
-  const customerId = parseInt(req.body.customer_id || '0', 10);
-  const manualLoanNo = String(req.body.manual_loan_no || '').trim();
-  const openedDate = toSqlDate(req.body.opened_date || req.body.manual_opened_date || req.body.date) || new Date().toISOString().split('T')[0];
-  const closedDate = toSqlDate(req.body.closed_date || req.body.manual_closed_date);
-  const principalAmount = parseFloat(req.body.principal_amount || '0');
-  const monthlyRate = parseFloat(req.body.monthly_interest_rate || '2.0');
-  const initialInterest = parseFloat(req.body.initial_interest || req.body.manual_interest || req.body.total_interest || '0');
-  const totalPaid = parseFloat(req.body.total_paid || '0');
+  const customerId = parseInt(req.body.customer_id || req.body.customerId || req.body.customer || '0', 10);
+  const manualLoanNo = String(req.body.manual_loan_no || req.body.manualLoanNo || req.body.loan_no || req.body.loanNo || '').trim();
+  const openedDate = toSqlDate(req.body.opened_date || req.body.openedDate || req.body.manual_opened_date || req.body.date) || new Date().toISOString().split('T')[0];
+  const closedDate = toSqlDate(req.body.closed_date || req.body.closedDate || req.body.manual_closed_date);
+  const principalAmount = parseFloat(req.body.principal_amount || req.body.principalAmount || req.body.amount || '0');
+  const monthlyRate = parseFloat(req.body.monthly_interest_rate || req.body.monthlyInterestRate || req.body.interest_rate || req.body.interestRate || '2.0');
+  const initialInterest = parseFloat(req.body.initial_interest || req.body.initialInterest || req.body.manual_interest || req.body.total_interest || '0');
+  const totalPaid = parseFloat(req.body.total_paid || req.body.totalPaid || req.body.amount_paid || '0');
 
   let status = String(req.body.status || 'ACTIVE').trim().toUpperCase();
   if (!['ACTIVE', 'CLOSED', 'PARTIALLY_PAID', 'PARTIALLY_RELEASED'].includes(status)) {
@@ -190,7 +190,7 @@ async function handleCreateLoan(req, res, defaultLoanType = 'NEW_LOAN') {
 
   const remarks = String(req.body.remarks || '').trim();
 
-  let items = req.body.items || req.body.gold_item_ids || req.body.gold_items || [];
+  let items = req.body.items || req.body.gold_item_ids || req.body.gold_items || req.body.goldItems || [];
   if (typeof items === 'string') {
     try {
       items = JSON.parse(items);
@@ -205,7 +205,7 @@ async function handleCreateLoan(req, res, defaultLoanType = 'NEW_LOAN') {
     }
   }
 
-  let loanType = String(req.body.loan_type || defaultLoanType).trim().toUpperCase();
+  let loanType = String(req.body.loan_type || req.body.loanType || defaultLoanType).trim().toUpperCase();
   if (!['NEW_LOAN', 'EXISTING_LOAN', 'ADDITIONAL_LOAN'].includes(loanType)) {
     if (loanType.includes('EXISTING')) {
       loanType = 'EXISTING_LOAN';
@@ -296,15 +296,16 @@ async function handleCreateLoan(req, res, defaultLoanType = 'NEW_LOAN') {
         let pledgedWeight = 0;
 
         if (typeof item === 'object' && item !== null) {
-          if (item.gold_item_id) {
-            goldItemId = parseInt(item.gold_item_id, 10);
-            pledgedWeight = parseFloat(item.pledged_weight || item.weight || '0');
-          } else if (item.item_name) {
-            const itemName = String(item.item_name || 'Gold Item').trim();
-            const purity = String(item.purity || '22K').trim();
-            const weightVal = parseFloat(item.weight || item.pledged_weight || '0') || 0;
-            const itemRemarks = item.remarks ? String(item.remarks).trim() : null;
+          const itemGId = parseInt(item.gold_item_id || item.id || item.gold_id || '0', 10);
+          const itemName = String(item.item_name || item.name || item.title || '').trim();
+          const purity = String(item.purity || item.karat || '22K').trim();
+          const weightVal = parseFloat(item.weight || item.pledged_weight || item.net_weight || '0') || 0;
+          const itemRemarks = item.remarks ? String(item.remarks).trim() : null;
 
+          if (itemGId > 0) {
+            goldItemId = itemGId;
+            pledgedWeight = weightVal;
+          } else if (itemName) {
             const [gRes] = await conn.query(
               `INSERT INTO gold_items (customer_id, item_name, purity, weight, remarks, status)
                VALUES (?, ?, ?, ?, ?, 'PLEDGED')`,

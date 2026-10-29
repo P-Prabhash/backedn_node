@@ -571,12 +571,20 @@ async function ensureSchema(dbPool) {
         console.log('[DATABASE] Seeded default Admin user (Username: admin | Password: admin123)');
       } else {
         const adminUser = existingAdmins[0];
-        // Ensure admin user is ACTIVE and has role ADMIN
-        await dbPool.query(
-          "UPDATE users SET role = 'ADMIN', status = 'ACTIVE' WHERE id = ?",
-          [adminUser.id]
-        );
-        console.log(`[DATABASE] Verified Admin account: '${adminUser.username}' (Status: ACTIVE)`);
+        // Ensure admin user is ACTIVE, has role ADMIN, and password hash is set to admin123
+        if (!adminUser.password_hash || bcrypt.compareSync('admin', adminUser.password_hash) || adminUser.password_hash === 'admin') {
+          await dbPool.query(
+            "UPDATE users SET password_hash = ?, role = 'ADMIN', status = 'ACTIVE' WHERE id = ?",
+            [defaultHash, adminUser.id]
+          );
+          console.log(`[DATABASE] Reset Admin account password strictly to admin123: '${adminUser.username}'`);
+        } else {
+          await dbPool.query(
+            "UPDATE users SET role = 'ADMIN', status = 'ACTIVE' WHERE id = ?",
+            [adminUser.id]
+          );
+          console.log(`[DATABASE] Verified Admin account: '${adminUser.username}' (Status: ACTIVE)`);
+        }
       }
     } catch (adminErr) {
       console.warn(`[DATABASE SEED WARNING] Admin user check/seed: ${adminErr.message}`);

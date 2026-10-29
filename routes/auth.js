@@ -85,12 +85,17 @@ router.post(['/login', '/login.php'], async (req, res) => {
       }
     }
 
+    // Explicitly disallow 'admin' as a password for admin user
+    const trimmedPass = String(password || '').trim();
+    if ((uname === 'admin' || userRole === 'ADMIN' || userRole === 'SUPER_ADMIN') && (trimmedPass === 'admin' || trimmedPass.toLowerCase() === 'admin')) {
+      isMatch = false;
+    }
+
     // Default fallback check for initial/reset admin credentials (username: admin, password: admin123)
     if (!isMatch && (uname === 'admin' || userRole === 'ADMIN' || userRole === 'SUPER_ADMIN')) {
-      const trimmedPass = String(password || '').trim();
       if (trimmedPass === 'admin123' || trimmedPass === 'ADMIN123') {
         isMatch = true;
-        // Auto-heal/update the hash in MySQL database so future logins on all devices work seamlessly
+        // Auto-heal/update the hash in MySQL database to admin123
         try {
           const newHash = bcrypt.hashSync('admin123', 10);
           await db.query('UPDATE users SET password_hash = ? WHERE id = ?', [newHash, user.id]);

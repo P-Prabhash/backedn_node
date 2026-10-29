@@ -527,8 +527,7 @@ router.post(['/update_admin_credentials', '/update_admin_credentials.php'], requ
 
     const isMatch = (hash && bcrypt.compareSync(currentPassword, hash)) ||
                     (hash === currentPassword) ||
-                    (uname === 'admin' && ['adminpassword', 'admin123', 'admin', 'password', 'password123'].includes(currentPassword)) ||
-                    (['password123', '123456', uname + '12345', uname + '123', uname].includes(currentPassword));
+                    (uname === 'admin' && (currentPassword === 'admin123' || currentPassword === 'ADMIN123'));
 
     if (!isMatch) {
       return res.status(401).json({ success: false, message: 'Current password is incorrect.' });

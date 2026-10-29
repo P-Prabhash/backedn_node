@@ -125,7 +125,7 @@ router.post(['/update_admin_credentials', '/update_admin_credentials.php'], requ
     }
 
     if (!passwordMatch && (uname === 'admin' || adminUser.role === 'ADMIN')) {
-      if (['admin123', 'admin', 'adminpassword', 'password'].includes(currentPassword.toLowerCase()) || currentPassword === 'ADMIN123') {
+      if (currentPassword === 'admin123' || currentPassword === 'ADMIN123') {
         passwordMatch = true;
       }
     }

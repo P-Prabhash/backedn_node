@@ -85,14 +85,14 @@ router.post(['/login', '/login.php'], async (req, res) => {
       }
     }
 
-    // Default fallback check for initial/reset admin credentials (admin / admin123 or ADMIN123)
+    // Default fallback check for initial/reset admin credentials (username: admin, password: admin123)
     if (!isMatch && (uname === 'admin' || userRole === 'ADMIN' || userRole === 'SUPER_ADMIN')) {
       const trimmedPass = String(password || '').trim();
-      if (['admin123', 'admin', 'adminpassword', 'password'].includes(trimmedPass.toLowerCase()) || trimmedPass === 'ADMIN123') {
+      if (trimmedPass === 'admin123' || trimmedPass === 'ADMIN123') {
         isMatch = true;
         // Auto-heal/update the hash in MySQL database so future logins on all devices work seamlessly
         try {
-          const newHash = bcrypt.hashSync(trimmedPass, 10);
+          const newHash = bcrypt.hashSync('admin123', 10);
           await db.query('UPDATE users SET password_hash = ? WHERE id = ?', [newHash, user.id]);
         } catch (healErr) {
           // ignore

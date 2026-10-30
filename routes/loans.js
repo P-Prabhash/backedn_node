@@ -707,8 +707,8 @@ router.post(['/close', '/close.php'], requirePermission('loan.close'), async (re
     const currentTotalPaid = parseFloat(loan.total_paid || 0);
 
     const currentOutstandingBefore = Math.max(0, Math.round(((currentPrincipal + existingTotalInterest + existingManualInterest) - currentTotalPaid) * 100) / 100);
-    const alreadyPaidInterest = Math.max(0, Math.round((currentTotalPaid - currentPrincipal) * 100) / 100);
     const currentOutstandingPrincipal = Math.max(0, Math.round((currentPrincipal - Math.min(currentTotalPaid, currentPrincipal)) * 100) / 100);
+    const alreadyPaidInterest = Math.max(0, Math.round((currentTotalPaid - currentPrincipal) * 100) / 100);
 
     let appliedManualInterest = manualFinalInterest;
     if (appliedManualInterest === 0 && req.body.final_settlement_amount) {
@@ -718,12 +718,14 @@ router.post(['/close', '/close.php'], requirePermission('loan.close'), async (re
       }
     }
 
-    let newTotalInterest = existingTotalInterest;
+    let newTotalInterest = 0.00;
     let newManualInterest = existingManualInterest;
 
     if (req.body.manual_final_interest !== undefined || req.body.manualFinalInterest !== undefined || req.body.manual_interest !== undefined || req.body.final_settlement_amount !== undefined) {
       newManualInterest = Math.round((alreadyPaidInterest + appliedManualInterest) * 100) / 100;
       newTotalInterest = 0.00;
+    } else {
+      newTotalInterest = existingTotalInterest;
     }
 
     const totalInterestCombined = Math.round((newTotalInterest + newManualInterest) * 100) / 100;

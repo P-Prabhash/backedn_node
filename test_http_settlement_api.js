@@ -83,6 +83,7 @@ async function testHttpSettlementApi() {
       })
     }).then(r => r.json());
 
+    console.log('   Response res1:', res1);
     console.log('   Response success:', res1.success);
     console.log('   Final Settlement Amount:', res1.data.final_settlement_amount);
     console.log('   Payment Amount:', res1.data.payment_amount);

@@ -707,17 +707,26 @@ router.post(['/close', '/close.php'], requirePermission('loan.close'), async (re
     const currentTotalPaid = parseFloat(loan.total_paid || 0);
 
     const currentOutstandingBefore = Math.max(0, Math.round(((currentPrincipal + existingTotalInterest + existingManualInterest) - currentTotalPaid) * 100) / 100);
+    const alreadyPaidInterest = Math.max(0, Math.round((currentTotalPaid - currentPrincipal) * 100) / 100);
+    const currentOutstandingPrincipal = Math.max(0, Math.round((currentPrincipal - Math.min(currentTotalPaid, currentPrincipal)) * 100) / 100);
 
     let appliedManualInterest = manualFinalInterest;
     if (appliedManualInterest === 0 && req.body.final_settlement_amount) {
       const passedSettlementAmount = parseFloat(req.body.final_settlement_amount || '0');
-      if (passedSettlementAmount > currentOutstandingBefore) {
-        appliedManualInterest = Math.round((passedSettlementAmount - currentOutstandingBefore) * 100) / 100;
+      if (passedSettlementAmount > currentOutstandingPrincipal) {
+        appliedManualInterest = Math.round((passedSettlementAmount - currentOutstandingPrincipal) * 100) / 100;
       }
     }
 
-    const newManualInterest = Math.round((existingManualInterest + appliedManualInterest) * 100) / 100;
-    const totalInterestCombined = Math.round((existingTotalInterest + newManualInterest) * 100) / 100;
+    let newTotalInterest = existingTotalInterest;
+    let newManualInterest = existingManualInterest;
+
+    if (req.body.manual_final_interest !== undefined || req.body.manualFinalInterest !== undefined || req.body.manual_interest !== undefined || req.body.final_settlement_amount !== undefined) {
+      newManualInterest = Math.round((alreadyPaidInterest + appliedManualInterest) * 100) / 100;
+      newTotalInterest = 0.00;
+    }
+
+    const totalInterestCombined = Math.round((newTotalInterest + newManualInterest) * 100) / 100;
     const totalDue = Math.round((currentPrincipal + totalInterestCombined) * 100) / 100;
     const finalSettlementAmount = Math.max(0, Math.round((totalDue - currentTotalPaid) * 100) / 100);
 
@@ -953,8 +962,8 @@ router.post(['/close', '/close.php'], requirePermission('loan.close'), async (re
     }
 
     await conn.query(
-      `UPDATE loans SET manual_final_interest = ?, total_due = ?, total_paid = ?, remaining_balance = ?, status = ?, closed_date = ? WHERE id = ?`,
-      [newManualInterest, totalDue, newTotalPaid, newRemainingBalance, loanStatus, closedDate, loanId]
+      `UPDATE loans SET total_interest = ?, manual_final_interest = ?, total_due = ?, total_paid = ?, remaining_balance = ?, status = ?, closed_date = ? WHERE id = ?`,
+      [newTotalInterest, newManualInterest, totalDue, newTotalPaid, newRemainingBalance, loanStatus, closedDate, loanId]
     );
 
     await conn.commit();

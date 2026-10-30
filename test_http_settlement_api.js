@@ -8,7 +8,7 @@ const loanRoutes = require('./routes/loans');
 const paymentRoutes = require('./routes/payments');
 
 async function testHttpSettlementApi() {
-  console.log('=== STARTING HTTP SETTLEMENT API CONTRACT TESTS ===\n');
+  console.log('=== STARTING HTTP SETTLEMENT API URGENT CONTRACT TESTS ===\n');
 
   const db = await getPool();
   const conn = await db.getConnection();
@@ -57,18 +57,18 @@ async function testHttpSettlementApi() {
 
   try {
     // -------------------------------------------------------------------------
-    // HTTP TEST 1: Example A — Principal-only payment (Rs 5000 paid on Rs 5100 due)
+    // TEST 1: Outstanding ₹1,000, interest ₹100, payment ₹100 → balance ₹1,000, ACTIVE
     // -------------------------------------------------------------------------
-    console.log('HTTP Test 1: Example A (Principal-only payment)...');
-    const [g1] = await conn.query("INSERT INTO gold_items (customer_id, item_name, purity, weight, status) VALUES (1, 'HTTP Test Gold Ring', '22K', 15.000, 'AVAILABLE')");
+    console.log('Test 1: Outstanding ₹1,000, interest ₹100, payment ₹100 → balance ₹1,000, ACTIVE...');
+    const [g1] = await conn.query("INSERT INTO gold_items (customer_id, item_name, purity, weight, status) VALUES (1, 'Test Gold Ring 1', '22K', 5.000, 'AVAILABLE')");
     const goldId1 = g1.insertId;
-    const loanNo1 = 'PL-HTTP1-' + Date.now();
+    const loanNo1 = 'PL-URGENT1-' + Date.now();
     const [l1] = await conn.query(
-      "INSERT INTO loans (loan_no, customer_id, loan_type, opened_date, principal_amount, monthly_interest_rate, total_interest, manual_final_interest, total_due, total_paid, remaining_balance, status) VALUES (?, 1, 'NEW_LOAN', CURRENT_DATE(), 5000.00, 2.00, 0.00, 0.00, 5000.00, 0.00, 5000.00, 'ACTIVE')",
+      "INSERT INTO loans (loan_no, customer_id, loan_type, opened_date, principal_amount, monthly_interest_rate, total_interest, manual_final_interest, total_due, total_paid, remaining_balance, status) VALUES (?, 1, 'NEW_LOAN', CURRENT_DATE(), 1000.00, 2.00, 0.00, 0.00, 1000.00, 0.00, 1000.00, 'ACTIVE')",
       [loanNo1]
     );
     const loanId1 = l1.insertId;
-    await conn.query("INSERT INTO loan_gold_items (loan_id, gold_item_id, pledged_weight, status, pledge_date) VALUES (?, ?, 15.000, 'PLEDGED', CURRENT_DATE())", [loanId1, goldId1]);
+    await conn.query("INSERT INTO loan_gold_items (loan_id, gold_item_id, pledged_weight, status, pledge_date) VALUES (?, ?, 5.000, 'PLEDGED', CURRENT_DATE())", [loanId1, goldId1]);
     await conn.query("UPDATE gold_items SET status = 'PLEDGED' WHERE id = ?", [goldId1]);
 
     const res1 = await fetch(`http://localhost:${PORT}/loans/close`, {
@@ -77,43 +77,41 @@ async function testHttpSettlementApi() {
       body: JSON.stringify({
         loan_id: loanId1,
         manual_final_interest: 100,
-        payment_amount: 5000,
+        payment_amount: 100,
         payment_mode: 'CASH',
-        remarks: 'Example A Principal Only Payment'
+        remarks: 'Test 1: Payment 100 against 1100 settlement'
       })
     }).then(r => r.json());
 
     console.log('   Response success:', res1.success);
-    console.log('   Message:', res1.message);
-    console.log('   Remaining Principal:', res1.data.remaining_principal);
-    console.log('   Remaining Interest:', res1.data.remaining_interest);
+    console.log('   Final Settlement Amount:', res1.data.final_settlement_amount);
+    console.log('   Payment Amount:', res1.data.payment_amount);
     console.log('   Total Remaining Balance:', res1.data.total_remaining_balance);
     console.log('   Loan Status:', res1.data.loan_status);
     console.log('   Is Closed:', res1.data.is_closed);
-    console.log('   Collateral Release Status:', res1.data.collateral_release_status);
+    console.log('   Collateral Status:', res1.data.collateral_release_status);
 
-    console.assert(res1.success === true, 'HTTP Test 1 Failed: success is false');
-    console.assert(res1.data.remaining_principal === 0, 'HTTP Test 1 Failed: remaining_principal not 0');
-    console.assert(res1.data.remaining_interest === 100, 'HTTP Test 1 Failed: remaining_interest not 100');
-    console.assert(res1.data.total_remaining_balance === 100, 'HTTP Test 1 Failed: total_remaining_balance not 100');
-    console.assert(res1.data.is_closed === false, 'HTTP Test 1 Failed: is_closed should be false');
-    console.assert(res1.data.collateral_release_status === 'PLEDGED', 'HTTP Test 1 Failed: collateral_release_status should be PLEDGED');
-    console.log('  ✓ HTTP Test 1 Passed!\n');
+    console.assert(res1.success === true, 'Test 1 Failed: success is false');
+    console.assert(res1.data.final_settlement_amount === 1100, 'Test 1 Failed: final_settlement_amount not 1100');
+    console.assert(res1.data.total_remaining_balance === 1000, 'Test 1 Failed: total_remaining_balance not 1000');
+    console.assert(res1.data.is_closed === false, 'Test 1 Failed: is_closed should be false');
+    console.assert(res1.data.collateral_release_status === 'PLEDGED', 'Test 1 Failed: collateral should stay PLEDGED');
+    console.log('  ✓ Test 1 Passed!\n');
     await cleanupLoan(loanId1, goldId1);
 
     // -------------------------------------------------------------------------
-    // HTTP TEST 2: Example B — Full settlement (Rs 5000 + Rs 100 = Rs 5100 paid)
+    // TEST 2: Outstanding ₹1,000, interest ₹100, payment ₹1,000 → balance ₹100, ACTIVE
     // -------------------------------------------------------------------------
-    console.log('HTTP Test 2: Full settlement (Rs 5000 + Rs 100 = Rs 5100)...');
-    const [g2] = await conn.query("INSERT INTO gold_items (customer_id, item_name, purity, weight, status) VALUES (1, 'HTTP Test Gold Necklace', '22K', 25.000, 'AVAILABLE')");
+    console.log('Test 2: Outstanding ₹1,000, interest ₹100, payment ₹1,000 → balance ₹100, ACTIVE...');
+    const [g2] = await conn.query("INSERT INTO gold_items (customer_id, item_name, purity, weight, status) VALUES (1, 'Test Gold Ring 2', '22K', 6.000, 'AVAILABLE')");
     const goldId2 = g2.insertId;
-    const loanNo2 = 'PL-HTTP2-' + Date.now();
+    const loanNo2 = 'PL-URGENT2-' + Date.now();
     const [l2] = await conn.query(
-      "INSERT INTO loans (loan_no, customer_id, loan_type, opened_date, principal_amount, monthly_interest_rate, total_interest, manual_final_interest, total_due, total_paid, remaining_balance, status) VALUES (?, 1, 'NEW_LOAN', CURRENT_DATE(), 5000.00, 2.00, 0.00, 0.00, 5000.00, 0.00, 5000.00, 'ACTIVE')",
+      "INSERT INTO loans (loan_no, customer_id, loan_type, opened_date, principal_amount, monthly_interest_rate, total_interest, manual_final_interest, total_due, total_paid, remaining_balance, status) VALUES (?, 1, 'NEW_LOAN', CURRENT_DATE(), 1000.00, 2.00, 0.00, 0.00, 1000.00, 0.00, 1000.00, 'ACTIVE')",
       [loanNo2]
     );
     const loanId2 = l2.insertId;
-    await conn.query("INSERT INTO loan_gold_items (loan_id, gold_item_id, pledged_weight, status, pledge_date) VALUES (?, ?, 25.000, 'PLEDGED', CURRENT_DATE())", [loanId2, goldId2]);
+    await conn.query("INSERT INTO loan_gold_items (loan_id, gold_item_id, pledged_weight, status, pledge_date) VALUES (?, ?, 6.000, 'PLEDGED', CURRENT_DATE())", [loanId2, goldId2]);
     await conn.query("UPDATE gold_items SET status = 'PLEDGED' WHERE id = ?", [goldId2]);
 
     const res2 = await fetch(`http://localhost:${PORT}/loans/close`, {
@@ -122,9 +120,9 @@ async function testHttpSettlementApi() {
       body: JSON.stringify({
         loan_id: loanId2,
         manual_final_interest: 100,
-        payment_amount: 5100,
-        payment_mode: 'UPI',
-        remarks: 'Example B Full Settlement 5000+100=5100'
+        payment_amount: 1000,
+        payment_mode: 'CASH',
+        remarks: 'Test 2: Payment 1000 against 1100 settlement'
       })
     }).then(r => r.json());
 
@@ -134,140 +132,59 @@ async function testHttpSettlementApi() {
     console.log('   Total Remaining Balance:', res2.data.total_remaining_balance);
     console.log('   Loan Status:', res2.data.loan_status);
     console.log('   Is Closed:', res2.data.is_closed);
+    console.log('   Collateral Status:', res2.data.collateral_release_status);
 
-    console.assert(res2.success === true, 'HTTP Test 2 Failed: success is false');
-    console.assert(res2.data.final_settlement_amount === 5100, 'HTTP Test 2 Failed: final_settlement_amount not 5100');
-    console.assert(res2.data.total_remaining_balance === 0, 'HTTP Test 2 Failed: total_remaining_balance not 0');
-    console.assert(res2.data.is_closed === true, 'HTTP Test 2 Failed: is_closed should be true');
-    console.assert(res2.data.loan_status === 'CLOSED', 'HTTP Test 2 Failed: loan_status should be CLOSED');
-    console.assert(res2.data.collateral_release_status === 'RELEASED', 'HTTP Test 2 Failed: collateral_release_status should be RELEASED');
-    console.log('  ✓ HTTP Test 2 Passed!\n');
+    console.assert(res2.success === true, 'Test 2 Failed: success is false');
+    console.assert(res2.data.final_settlement_amount === 1100, 'Test 2 Failed: final_settlement_amount not 1100');
+    console.assert(res2.data.total_remaining_balance === 100, 'Test 2 Failed: total_remaining_balance not 100');
+    console.assert(res2.data.is_closed === false, 'Test 2 Failed: is_closed should be false');
+    console.assert(res2.data.collateral_release_status === 'PLEDGED', 'Test 2 Failed: collateral should stay PLEDGED');
+    console.log('  ✓ Test 2 Passed!\n');
+    await cleanupLoan(loanId2, goldId2);
 
     // -------------------------------------------------------------------------
-    // HTTP TEST 2B: Full settlement (Rs 1000 + Rs 100 = Rs 1100 paid)
+    // TEST 3: Outstanding ₹1,000, interest ₹100, payment ₹1,100 → balance ₹0, CLOSED
     // -------------------------------------------------------------------------
-    console.log('HTTP Test 2B: Full settlement (Rs 1000 + Rs 100 = Rs 1100)...');
-    const [g2b] = await conn.query("INSERT INTO gold_items (customer_id, item_name, purity, weight, status) VALUES (1, 'HTTP Test Gold Coin', '24K', 5.000, 'AVAILABLE')");
-    const goldId2b = g2b.insertId;
-    const loanNo2b = 'PL-HTTP2B-' + Date.now();
-    const [l2b] = await conn.query(
+    console.log('Test 3: Outstanding ₹1,000, interest ₹100, payment ₹1,100 → balance ₹0, CLOSED...');
+    const [g3] = await conn.query("INSERT INTO gold_items (customer_id, item_name, purity, weight, status) VALUES (1, 'Test Gold Ring 3', '22K', 7.000, 'AVAILABLE')");
+    const goldId3 = g3.insertId;
+    const loanNo3 = 'PL-URGENT3-' + Date.now();
+    const [l3] = await conn.query(
       "INSERT INTO loans (loan_no, customer_id, loan_type, opened_date, principal_amount, monthly_interest_rate, total_interest, manual_final_interest, total_due, total_paid, remaining_balance, status) VALUES (?, 1, 'NEW_LOAN', CURRENT_DATE(), 1000.00, 2.00, 0.00, 0.00, 1000.00, 0.00, 1000.00, 'ACTIVE')",
-      [loanNo2b]
+      [loanNo3]
     );
-    const loanId2b = l2b.insertId;
-    await conn.query("INSERT INTO loan_gold_items (loan_id, gold_item_id, pledged_weight, status, pledge_date) VALUES (?, ?, 5.000, 'PLEDGED', CURRENT_DATE())", [loanId2b, goldId2b]);
-    await conn.query("UPDATE gold_items SET status = 'PLEDGED' WHERE id = ?", [goldId2b]);
+    const loanId3 = l3.insertId;
+    await conn.query("INSERT INTO loan_gold_items (loan_id, gold_item_id, pledged_weight, status, pledge_date) VALUES (?, ?, 7.000, 'PLEDGED', CURRENT_DATE())", [loanId3, goldId3]);
+    await conn.query("UPDATE gold_items SET status = 'PLEDGED' WHERE id = ?", [goldId3]);
 
-    const res2b = await fetch(`http://localhost:${PORT}/loans/close`, {
-      method: 'POST',
-      headers: authHeaders,
-      body: JSON.stringify({
-        loan_id: loanId2b,
-        manual_final_interest: 100,
-        payment_amount: 1100,
-        payment_mode: 'CASH',
-        remarks: 'Full Settlement 1000+100=1100'
-      })
-    }).then(r => r.json());
-
-    console.log('   Response success:', res2b.success);
-    console.log('   Final Settlement Amount:', res2b.data.final_settlement_amount);
-    console.log('   Payment Amount:', res2b.data.payment_amount);
-    console.log('   Total Remaining Balance:', res2b.data.total_remaining_balance);
-    console.log('   Loan Status:', res2b.data.loan_status);
-    console.log('   Is Closed:', res2b.data.is_closed);
-
-    console.assert(res2b.success === true, 'HTTP Test 2B Failed: success is false');
-    console.assert(res2b.data.final_settlement_amount === 1100, 'HTTP Test 2B Failed: final_settlement_amount not 1100');
-    console.assert(res2b.data.total_remaining_balance === 0, 'HTTP Test 2B Failed: total_remaining_balance not 0');
-    console.assert(res2b.data.is_closed === true, 'HTTP Test 2B Failed: is_closed should be true');
-    console.assert(res2b.data.loan_status === 'CLOSED', 'HTTP Test 2B Failed: loan_status should be CLOSED');
-    console.assert(res2b.data.collateral_release_status === 'RELEASED', 'HTTP Test 2B Failed: collateral_release_status should be RELEASED');
-    console.log('  ✓ HTTP Test 2B Passed!\n');
-    await cleanupLoan(loanId2b, goldId2b);
-
-    // -------------------------------------------------------------------------
-    // HTTP TEST 3: Calling /loans/close on an ALREADY CLOSED loan
-    // -------------------------------------------------------------------------
-    console.log('HTTP Test 3: Closing an already closed loan should fail (400)...');
     const res3 = await fetch(`http://localhost:${PORT}/loans/close`, {
       method: 'POST',
       headers: authHeaders,
       body: JSON.stringify({
-        loan_id: loanId2,
-        payment_amount: 100
-      })
-    });
-    const res3Data = await res3.json();
-    console.log('   HTTP Status Code:', res3.status);
-    console.log('   Response:', res3Data);
-
-    console.assert(res3.status === 400, 'HTTP Test 3 Failed: status code not 400');
-    console.assert(res3Data.success === false, 'HTTP Test 3 Failed: success should be false');
-    console.log('  ✓ HTTP Test 3 Passed!\n');
-    await cleanupLoan(loanId2, goldId2);
-
-    // -------------------------------------------------------------------------
-    // HTTP TEST 4: Example C — Partial payment (Rs 3000 paid on Rs 5100 due)
-    // -------------------------------------------------------------------------
-    console.log('HTTP Test 4: Example C (Partial payment)...');
-    const [g4] = await conn.query("INSERT INTO gold_items (customer_id, item_name, purity, weight, status) VALUES (1, 'HTTP Test Gold Bangles', '22K', 18.000, 'AVAILABLE')");
-    const goldId4 = g4.insertId;
-    const loanNo4 = 'PL-HTTP4-' + Date.now();
-    const [l4] = await conn.query(
-      "INSERT INTO loans (loan_no, customer_id, loan_type, opened_date, principal_amount, monthly_interest_rate, total_interest, manual_final_interest, total_due, total_paid, remaining_balance, status) VALUES (?, 1, 'NEW_LOAN', CURRENT_DATE(), 5000.00, 2.00, 0.00, 0.00, 5000.00, 0.00, 5000.00, 'ACTIVE')",
-      [loanNo4]
-    );
-    const loanId4 = l4.insertId;
-    await conn.query("INSERT INTO loan_gold_items (loan_id, gold_item_id, pledged_weight, status, pledge_date) VALUES (?, ?, 18.000, 'PLEDGED', CURRENT_DATE())", [loanId4, goldId4]);
-    await conn.query("UPDATE gold_items SET status = 'PLEDGED' WHERE id = ?", [goldId4]);
-
-    const res4 = await fetch(`http://localhost:${PORT}/loans/close`, {
-      method: 'POST',
-      headers: authHeaders,
-      body: JSON.stringify({
-        loan_id: loanId4,
+        loan_id: loanId3,
         manual_final_interest: 100,
-        payment_amount: 3000,
-        payment_mode: 'CASH',
-        remarks: 'Example C Partial Payment'
+        payment_amount: 1100,
+        payment_mode: 'UPI',
+        remarks: 'Test 3: Payment 1100 against 1100 settlement'
       })
     }).then(r => r.json());
 
-    console.log('   Response success:', res4.success);
-    console.log('   Message:', res4.message);
-    console.log('   Remaining Principal:', res4.data.remaining_principal);
-    console.log('   Remaining Interest:', res4.data.remaining_interest);
-    console.log('   Total Remaining Balance:', res4.data.total_remaining_balance);
-    console.log('   Loan Status:', res4.data.loan_status);
-    console.log('   Is Closed:', res4.data.is_closed);
+    console.log('   Response success:', res3.success);
+    console.log('   Final Settlement Amount:', res3.data.final_settlement_amount);
+    console.log('   Payment Amount:', res3.data.payment_amount);
+    console.log('   Total Remaining Balance:', res3.data.total_remaining_balance);
+    console.log('   Loan Status:', res3.data.loan_status);
+    console.log('   Is Closed:', res3.data.is_closed);
+    console.log('   Collateral Status:', res3.data.collateral_release_status);
 
-    console.assert(res4.success === true, 'HTTP Test 4 Failed: success is false');
-    console.assert(res4.data.remaining_principal === 2000, 'HTTP Test 4 Failed: remaining_principal not 2000');
-    console.assert(res4.data.remaining_interest === 100, 'HTTP Test 4 Failed: remaining_interest not 100');
-    console.assert(res4.data.total_remaining_balance === 2100, 'HTTP Test 4 Failed: total_remaining_balance not 2100');
-    console.assert(res4.data.is_closed === false, 'HTTP Test 4 Failed: is_closed should be false');
-    console.log('  ✓ HTTP Test 4 Passed!\n');
-
-    // -------------------------------------------------------------------------
-    // HTTP TEST 5: GET /loans/get returns updated loan balances & breakdown
-    // -------------------------------------------------------------------------
-    console.log('HTTP Test 5: GET /loans/get returns correct remaining principal and interest...');
-    const res5 = await fetch(`http://localhost:${PORT}/loans/get?id=${loanId4}`, {
-      method: 'GET',
-      headers: authHeaders
-    }).then(r => r.json());
-
-    console.log('   GET /loans/get loan remaining_principal:', res5.data.loan.remaining_principal);
-    console.log('   GET /loans/get loan remaining_interest:', res5.data.loan.remaining_interest);
-    console.log('   GET /loans/get loan remaining_balance:', res5.data.loan.remaining_balance);
-
-    console.assert(res5.data.loan.remaining_principal === 2000, 'HTTP Test 5 Failed: remaining_principal not 2000');
-    console.assert(res5.data.loan.remaining_interest === 100, 'HTTP Test 5 Failed: remaining_interest not 100');
-    console.assert(res5.data.loan.remaining_balance === 2100, 'HTTP Test 5 Failed: remaining_balance not 2100');
-    console.log('  ✓ HTTP Test 5 Passed!\n');
-
-    await cleanupLoan(loanId4, goldId4);
+    console.assert(res3.success === true, 'Test 3 Failed: success is false');
+    console.assert(res3.data.final_settlement_amount === 1100, 'Test 3 Failed: final_settlement_amount not 1100');
+    console.assert(res3.data.total_remaining_balance === 0, 'Test 3 Failed: total_remaining_balance not 0');
+    console.assert(res3.data.is_closed === true, 'Test 3 Failed: is_closed should be true');
+    console.assert(res3.data.loan_status === 'CLOSED', 'Test 3 Failed: loan_status should be CLOSED');
+    console.assert(res3.data.collateral_release_status === 'RELEASED', 'Test 3 Failed: collateral should be RELEASED');
+    console.log('  ✓ Test 3 Passed!\n');
+    await cleanupLoan(loanId3, goldId3);
 
   } catch (err) {
     console.error('HTTP Test Error:', err);

@@ -94,18 +94,30 @@ router.post(['/create', '/create.php'], requirePermission('payment.create'), asy
     `, [loanId]);
 
     const principal = parseFloat(loan.principal_amount || 0);
+    const existingTotalInterest = parseFloat(loan.total_interest || 0);
+    const existingManualInterest = parseFloat(loan.manual_final_interest || 0);
     const currentTotalPaid = parseFloat(loan.total_paid || 0);
-    const totalDue = parseFloat(loan.total_due || principal);
-    const currentRemaining = parseFloat(loan.remaining_balance || Math.max(0, totalDue - currentTotalPaid));
+
+    const newManualInterest = existingManualInterest + manualInterest;
+    const totalDue = principal + existingTotalInterest + newManualInterest;
+    const currentRemaining = Math.max(0, Math.round((totalDue - currentTotalPaid) * 100) / 100);
 
     if (principalPayment > currentRemaining + 0.01) {
       await conn.rollback();
       conn.release();
-      return res.status(422).json({ success: false, message: `Principal payment amount (Rs ${principalPayment}) cannot exceed remaining principal balance (Rs ${currentRemaining}).` });
+      return res.status(422).json({ success: false, message: `Principal payment amount (Rs ${principalPayment}) cannot exceed remaining balance (Rs ${currentRemaining}).` });
+    }
+
+    if (manualInterest > 0) {
+      await conn.query(
+        `INSERT INTO interest_records (loan_id, period_start, period_end, monthly_rate, interest_amount, is_manual, remarks)
+         VALUES (?, CURRENT_DATE(), CURRENT_DATE(), 0.00, ?, 1, 'Manual Payment Interest')`,
+        [loanId, manualInterest]
+      );
     }
 
     const newTotalPaid = currentTotalPaid + principalPayment;
-    const newRemainingBalance = Math.max(0, Math.round((currentRemaining - principalPayment) * 100) / 100);
+    const newRemainingBalance = Math.max(0, Math.round((totalDue - newTotalPaid) * 100) / 100);
     const paymentType = newRemainingBalance <= 0 ? 'FINAL_SETTLEMENT' : 'PARTIAL';
 
     const receiptNo = 'RCP-' + new Date().toISOString().slice(0,10).replace(/-/g,'') + '-' + Math.random().toString(36).substring(2,7).toUpperCase();
@@ -133,8 +145,8 @@ router.post(['/create', '/create.php'], requirePermission('payment.create'), asy
     const closedDate = newRemainingBalance <= 0 ? paymentDate : null;
 
     await conn.query(
-      `UPDATE loans SET total_paid = ?, remaining_balance = ?, status = ?, closed_date = COALESCE(?, closed_date) WHERE id = ?`,
-      [newTotalPaid, newRemainingBalance, newLoanStatus, closedDate, loanId]
+      `UPDATE loans SET manual_final_interest = ?, total_due = ?, total_paid = ?, remaining_balance = ?, status = ?, closed_date = COALESCE(?, closed_date) WHERE id = ?`,
+      [newManualInterest, totalDue, newTotalPaid, newRemainingBalance, newLoanStatus, closedDate, loanId]
     );
 
     // AUTOMATIC FULL GOLD RELEASE IF LOAN IS FULLY SETTLED (newRemainingBalance <= 0)

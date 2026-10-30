@@ -69,6 +69,15 @@ router.get(['/list', '/list.php'], requirePermission('loan.view'), async (req, r
 
     for (const l of loans) {
       l.customer_photo = formatPhotoUrl(req, l.customer_photo);
+      const principal = parseFloat(l.principal_amount || 0);
+      const totalInterest = parseFloat(l.total_interest || 0) + parseFloat(l.manual_final_interest || 0);
+      const totalDue = parseFloat(l.total_due || (principal + totalInterest));
+      const totalPaid = parseFloat(l.total_paid || 0);
+      const remBal = Math.max(0, Math.round((totalDue - totalPaid) * 100) / 100);
+      const paidPrincipal = Math.min(totalPaid, principal);
+      l.remaining_principal = Math.max(0, Math.round((principal - paidPrincipal) * 100) / 100);
+      l.remaining_interest = Math.max(0, Math.round((remBal - l.remaining_principal) * 100) / 100);
+      l.remaining_balance = remBal;
     }
 
     return res.json({
@@ -106,6 +115,15 @@ router.get(['/get', '/get.php'], requirePermission('loan.view'), async (req, res
     }
 
     const loan = loanRows[0];
+    const principal = parseFloat(loan.principal_amount || 0);
+    const totalInterest = parseFloat(loan.total_interest || 0) + parseFloat(loan.manual_final_interest || 0);
+    const totalDue = parseFloat(loan.total_due || (principal + totalInterest));
+    const totalPaid = parseFloat(loan.total_paid || 0);
+    const remBal = Math.max(0, Math.round((totalDue - totalPaid) * 100) / 100);
+    const paidPrincipal = Math.min(totalPaid, principal);
+    loan.remaining_principal = Math.max(0, Math.round((principal - paidPrincipal) * 100) / 100);
+    loan.remaining_interest = Math.max(0, Math.round((remBal - loan.remaining_principal) * 100) / 100);
+    loan.remaining_balance = remBal;
 
     const customer = {
       id: loan.customer_id,
@@ -638,14 +656,25 @@ router.post(['/create_existing', '/create_existing.php'], requirePermission('loa
 // POST /loans/close (.php)
 // ============================================================
 router.post(['/close', '/close.php'], requirePermission('loan.close'), async (req, res) => {
-  const loanId = parseInt(req.body.loan_id || '0', 10);
-  const manualFinalInterest = parseFloat(req.body.manual_final_interest || '0');
-  const paymentAmount = parseFloat(req.body.payment_amount || '0');
-  const paymentMode = String(req.body.payment_mode || 'CASH').trim();
-  const remarks = String(req.body.remarks || '').trim();
+  const loanId = parseInt(req.body.loan_id || req.body.loanId || req.body.id || '0', 10);
+  const manualFinalInterest = parseFloat(req.body.manual_final_interest || req.body.manualFinalInterest || req.body.manual_interest || '0');
+  const paymentAmount = parseFloat(req.body.payment_amount || req.body.paymentAmount || req.body.amount || req.body.payment_received || '0');
+  const paymentMode = String(req.body.payment_mode || req.body.paymentMode || 'CASH').trim().toUpperCase();
+  const paymentReference = String(req.body.payment_reference || req.body.paymentReference || req.body.reference_id || req.body.ref_no || '').trim();
+  const remarks = String(req.body.remarks || req.body.notes || '').trim();
+  const txDate = toSqlDate(req.body.transaction_date || req.body.transactionDate || req.body.payment_date || req.body.date) || new Date().toISOString().split('T')[0];
+  const txTime = new Date().toTimeString().split(' ')[0];
 
   if (loanId <= 0) {
     return res.status(400).json({ success: false, message: 'Valid Loan ID is required' });
+  }
+
+  if (isNaN(manualFinalInterest) || manualFinalInterest < 0) {
+    return res.status(422).json({ success: false, message: 'Manual final interest must be a valid non-negative number' });
+  }
+
+  if (isNaN(paymentAmount) || paymentAmount < 0) {
+    return res.status(422).json({ success: false, message: 'Payment amount must be a valid non-negative number' });
   }
 
   const db = await getPool();
@@ -677,89 +706,151 @@ router.post(['/close', '/close.php'], requirePermission('loan.close'), async (re
     const existingManualInterest = parseFloat(loan.manual_final_interest || 0);
     const currentTotalPaid = parseFloat(loan.total_paid || 0);
 
-    let newManualInterest = existingManualInterest;
-    if (manualFinalInterest > 0) {
-      newManualInterest += manualFinalInterest;
-      await logTransaction(conn, customerId, loanId, 'FINAL_MANUAL_INTEREST', manualFinalInterest, 0, loan.loan_no, `Manual Final Interest of Rs ${manualFinalInterest.toFixed(2)} applied`, 'STAFF');
+    const currentOutstandingBefore = Math.max(0, Math.round(((currentPrincipal + existingTotalInterest + existingManualInterest) - currentTotalPaid) * 100) / 100);
+
+    let appliedManualInterest = manualFinalInterest;
+    if (appliedManualInterest === 0 && req.body.final_settlement_amount) {
+      const passedSettlementAmount = parseFloat(req.body.final_settlement_amount || '0');
+      if (passedSettlementAmount > currentOutstandingBefore) {
+        appliedManualInterest = Math.round((passedSettlementAmount - currentOutstandingBefore) * 100) / 100;
+      }
+    }
+
+    const newManualInterest = Math.round((existingManualInterest + appliedManualInterest) * 100) / 100;
+    const totalInterestCombined = Math.round((existingTotalInterest + newManualInterest) * 100) / 100;
+    const totalDue = Math.round((currentPrincipal + totalInterestCombined) * 100) / 100;
+    const finalSettlementAmount = Math.max(0, Math.round((totalDue - currentTotalPaid) * 100) / 100);
+
+    if (appliedManualInterest > 0) {
+      await logTransaction(conn, customerId, loanId, 'FINAL_MANUAL_INTEREST', appliedManualInterest, 0, loan.loan_no, `Manual Final Interest of Rs ${appliedManualInterest.toFixed(2)} applied`, 'STAFF');
       await conn.query(
         `INSERT INTO interest_records (loan_id, period_start, period_end, monthly_rate, interest_amount, is_manual, remarks)
-         VALUES (?, CURRENT_DATE(), CURRENT_DATE(), 0.00, ?, 1, 'Manual Final Settlement Interest')`,
-        [loanId, manualFinalInterest]
+         VALUES (?, ?, ?, 0.00, ?, 1, 'Manual Final Settlement Interest')`,
+        [loanId, txDate, txDate, appliedManualInterest]
       );
     }
 
-    const totalDue = currentPrincipal + existingTotalInterest + newManualInterest;
-    const currentOutstanding = Math.max(0, totalDue - currentTotalPaid);
+    if (paymentAmount > finalSettlementAmount + 0.01) {
+      await conn.rollback();
+      conn.release();
+      return res.status(422).json({
+        success: false,
+        message: `Payment amount (Rs ${paymentAmount.toFixed(2)}) cannot exceed final settlement amount (Rs ${finalSettlementAmount.toFixed(2)})`
+      });
+    }
 
-    let newTotalPaid = currentTotalPaid;
-    let newRemainingBalance = currentOutstanding;
-    let receiptData = null;
+    const newTotalPaid = Math.round((currentTotalPaid + paymentAmount) * 100) / 100;
+    const newRemainingBalance = Math.max(0, Math.round((totalDue - newTotalPaid) * 100) / 100);
+
+    const prevPrincipalPaid = Math.min(currentTotalPaid, currentPrincipal);
+    const newPrincipalPaidTotal = Math.min(newTotalPaid, currentPrincipal);
+    const principalPaidThisTx = Math.max(0, Math.round((newPrincipalPaidTotal - prevPrincipalPaid) * 100) / 100);
+    const interestPaidThisTx = Math.max(0, Math.round((paymentAmount - principalPaidThisTx) * 100) / 100);
+
+    const remainingPrincipal = Math.max(0, Math.round((currentPrincipal - newPrincipalPaidTotal) * 100) / 100);
+    const remainingInterest = Math.max(0, Math.round((newRemainingBalance - remainingPrincipal) * 100) / 100);
+
+    let paymentId = null;
+    let paymentReceiptNo = null;
 
     if (paymentAmount > 0) {
-      if (paymentAmount > currentOutstanding + 0.01) {
-        await conn.rollback();
-        conn.release();
-        return res.status(422).json({ success: false, message: `Payment amount (Rs ${paymentAmount}) cannot exceed outstanding balance (Rs ${currentOutstanding})` });
-      }
-
-      newTotalPaid = currentTotalPaid + paymentAmount;
-      newRemainingBalance = Math.max(0, Math.round((totalDue - newTotalPaid) * 100) / 100);
-
-      const receiptNo = 'RCP-SET-' + new Date().toISOString().slice(0,10).replace(/-/g,'') + '-' + Math.random().toString(36).substring(2,7).toUpperCase();
-      const paymentDate = new Date().toISOString().split('T')[0];
-      const paymentTime = new Date().toTimeString().split(' ')[0];
+      paymentReceiptNo = 'RCP-SET-' + txDate.replace(/-/g,'') + '-' + Math.random().toString(36).substring(2,7).toUpperCase();
       const paymentType = (newRemainingBalance <= 0) ? 'FINAL_SETTLEMENT' : 'PARTIAL';
 
       const [payRes] = await conn.query(
         `INSERT INTO payments (
-          receipt_no, loan_id, customer_id, payment_type, amount, payment_date, payment_time, payment_mode,
+          receipt_no, loan_id, customer_id, payment_type, amount, manual_interest, total_received, payment_date, payment_time, payment_mode,
           previous_paid, new_total_paid, remaining_balance, remarks, created_by
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'STAFF')`,
-        [receiptNo, loanId, customerId, paymentType, paymentAmount, paymentDate, paymentTime, paymentMode, currentTotalPaid, newTotalPaid, newRemainingBalance, remarks || 'Final Settlement Payment']
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'STAFF')`,
+        [
+          paymentReceiptNo,
+          loanId,
+          customerId,
+          paymentType,
+          paymentAmount,
+          appliedManualInterest,
+          paymentAmount,
+          txDate,
+          txTime,
+          paymentMode,
+          currentTotalPaid,
+          newTotalPaid,
+          newRemainingBalance,
+          remarks || (paymentType === 'FINAL_SETTLEMENT' ? 'Final Settlement Payment' : 'Partial Settlement Payment')
+        ]
       );
 
-      const paymentId = payRes.insertId;
+      paymentId = payRes.insertId;
 
       await conn.query(
         `INSERT INTO payment_allocations (payment_id, principal_paid, interest_paid, manual_interest_paid)
-         VALUES (?, ?, 0.00, ?)`,
-        [paymentId, paymentAmount, manualFinalInterest]
+         VALUES (?, ?, ?, ?)`,
+        [paymentId, principalPaidThisTx, interestPaidThisTx, appliedManualInterest]
       );
 
       const txType = (newRemainingBalance <= 0) ? 'FULL_PAYMENT' : 'PARTIAL_PAYMENT';
-      await logTransaction(conn, customerId, loanId, txType, paymentAmount, 0, receiptNo, `Settlement payment received: Rs ${paymentAmount}. Remaining: Rs ${newRemainingBalance}`, 'STAFF');
+      await logTransaction(
+        conn,
+        customerId,
+        loanId,
+        txType,
+        paymentAmount,
+        0,
+        paymentReceiptNo,
+        remarks || `Settlement payment received: Rs ${paymentAmount.toFixed(2)}. Remaining: Rs ${newRemainingBalance.toFixed(2)}`,
+        'STAFF'
+      );
     }
 
-    let isClosed = false;
-    let closedDate = null;
-    let loanStatus = 'ACTIVE';
+    const isClosed = (newRemainingBalance <= 0);
+    const closedDate = isClosed ? txDate : null;
+    const loanStatus = isClosed ? 'CLOSED' : (newTotalPaid > 0 ? 'PARTIALLY_PAID' : loan.status);
 
-    if (newRemainingBalance <= 0) {
-      isClosed = true;
-      closedDate = new Date().toISOString().split('T')[0];
-      loanStatus = 'CLOSED';
+    let receiptData = null;
+    let receiptId = null;
+    let receiptNo = paymentReceiptNo;
+    let totalReleasedWeight = 0;
+    let pledgedCollateral = [];
 
-      const [pledgedCollateral] = await conn.query("SELECT * FROM loan_gold_items WHERE loan_id = ? AND status = 'PLEDGED'", [loanId]);
-      let totalReleasedAtClosure = 0;
+    if (isClosed) {
+      const [cols] = await conn.query(`
+        SELECT lgi.*, g.item_name, g.purity, g.weight
+        FROM loan_gold_items lgi
+        JOIN gold_items g ON lgi.gold_item_id = g.id
+        WHERE lgi.loan_id = ? AND lgi.status = 'PLEDGED'
+        FOR UPDATE
+      `, [loanId]);
+      pledgedCollateral = cols;
 
       for (const col of pledgedCollateral) {
-        await conn.query("UPDATE loan_gold_items SET status = 'RELEASED', release_date = ? WHERE id = ?", [closedDate, col.id]);
+        await conn.query("UPDATE loan_gold_items SET status = 'RELEASED', released_weight = pledged_weight, release_date = ? WHERE id = ?", [closedDate, col.id]);
         await conn.query("UPDATE gold_items SET status = 'RELEASED' WHERE id = ?", [col.gold_item_id]);
-        totalReleasedAtClosure += parseFloat(col.pledged_weight || 0);
+        totalReleasedWeight += parseFloat(col.pledged_weight || col.weight || 0);
       }
 
-      // Automatic Full Release Record Creation
       const [existingRel] = await conn.query("SELECT id FROM partial_releases WHERE loan_id = ? AND release_type = 'FULL' LIMIT 1", [loanId]);
-      if (existingRel.length === 0) {
-        const autoReleaseNo = 'REL-' + new Date().toISOString().slice(0,10).replace(/-/g,'') + '-' + Math.random().toString(36).substring(2,7).toUpperCase();
-        await conn.query(
-          `INSERT INTO partial_releases (release_no, loan_id, customer_id, release_type, total_weight_released, release_date, release_time, remarks, created_by)
-           VALUES (?, ?, ?, 'FULL', ?, ?, ?, 'Automatic full release upon loan settlement closure', 'STAFF')`,
-          [autoReleaseNo, loanId, customerId, totalReleasedAtClosure, closedDate, new Date().toTimeString().split(' ')[0]]
+      let releaseId = existingRel.length > 0 ? existingRel[0].id : null;
+
+      if (!releaseId) {
+        const autoReleaseNo = 'REL-' + txDate.replace(/-/g,'') + '-' + Math.random().toString(36).substring(2,7).toUpperCase();
+        const [relRes] = await conn.query(
+          `INSERT INTO partial_releases (release_no, loan_id, customer_id, payment_id, release_type, total_weight_released, release_date, release_time, remarks, created_by)
+           VALUES (?, ?, ?, ?, 'FULL', ?, ?, ?, 'Automatic full release upon loan settlement closure', 'STAFF')`,
+          [autoReleaseNo, loanId, customerId, paymentId, totalReleasedWeight, closedDate, txTime]
         );
+        releaseId = relRes.insertId;
+
+        for (const col of pledgedCollateral) {
+          await conn.query(
+            `INSERT INTO release_items (release_id, gold_item_id, item_name, purity, weight)
+             VALUES (?, ?, ?, ?, ?)`,
+            [releaseId, col.gold_item_id, col.item_name, col.purity, col.weight]
+          );
+        }
+
+        await logTransaction(conn, customerId, loanId, 'FULL_RELEASE', 0, totalReleasedWeight, loan.loan_no, `Full release of gold collateral (${totalReleasedWeight.toFixed(3)}g) upon closure`, 'STAFF');
       }
 
-      await logTransaction(conn, customerId, loanId, 'FULL_RELEASE', 0, totalReleasedAtClosure, loan.loan_no, `Full release of gold collateral (${totalReleasedAtClosure}g) upon closure`, 'STAFF');
       await logTransaction(conn, customerId, loanId, 'LOAN_CLOSED', 0, 0, loan.loan_no, `Loan ${loan.loan_no} fully settled and closed`, 'STAFF');
 
       await conn.query(
@@ -768,7 +859,8 @@ router.post(['/close', '/close.php'], requirePermission('loan.close'), async (re
         [loanId, loan.status]
       );
 
-      const closureReceiptNo = 'RCP-CLS-' + new Date().toISOString().slice(0,10).replace(/-/g,'') + '-' + loan.loan_no.replace('PL-', '');
+      const closureReceiptNo = 'RCP-CLS-' + txDate.replace(/-/g,'') + '-' + String(loan.loan_no).replace(/[^a-zA-Z0-9]/g, '');
+      receiptNo = closureReceiptNo;
       receiptData = {
         shop_name: 'GOLD & SILVER PAWN MANAGEMENT ERP',
         receipt_no: closureReceiptNo,
@@ -786,25 +878,78 @@ router.post(['/close', '/close.php'], requirePermission('loan.close'), async (re
           principal_amount: currentPrincipal,
           previous_interest: existingTotalInterest,
           manual_final_interest: newManualInterest,
-          final_settlement_amount: totalDue,
+          final_settlement_amount: finalSettlementAmount,
           total_paid: newTotalPaid,
           final_payment: paymentAmount,
           remaining_balance: 0.00,
+          remaining_principal: 0.00,
+          remaining_interest: 0.00,
           settlement_status: 'PAID IN FULL',
           loan_status: 'CLOSED'
         },
+        collateral: pledgedCollateral,
+        collateral_release_status: 'RELEASED',
         dates: {
           opened_date: loan.opened_date,
           closed_date: closedDate,
-          generated_date: new Date().toISOString().split('T')[0]
+          generated_date: txDate
         }
       };
 
-      await conn.query(
+      const [rcpRes] = await conn.query(
         `INSERT INTO receipts (receipt_no, receipt_type, reference_id, customer_id, loan_id, receipt_data_json)
          VALUES (?, 'CLOSURE', ?, ?, ?, ?)`,
         [closureReceiptNo, loan.loan_no, customerId, loanId, JSON.stringify(receiptData)]
       );
+      receiptId = rcpRes.insertId;
+    } else if (paymentId > 0) {
+      const [collateralRows] = await conn.query(`
+        SELECT lgi.*, g.item_name, g.purity, g.weight
+        FROM loan_gold_items lgi
+        JOIN gold_items g ON lgi.gold_item_id = g.id
+        WHERE lgi.loan_id = ?
+      `, [loanId]);
+
+      receiptData = {
+        shop_name: 'GOLD & SILVER PAWN MANAGEMENT ERP',
+        receipt_no: paymentReceiptNo,
+        receipt_type: 'PAYMENT',
+        loan_no: loan.loan_no,
+        loan_type: loan.loan_type,
+        customer: {
+          id: customer.id,
+          customer_code: customer.customer_code,
+          name: customer.name,
+          mobile: customer.mobile,
+          address: customer.address
+        },
+        financial: {
+          principal_amount: currentPrincipal,
+          total_interest: totalInterestCombined,
+          manual_final_interest: newManualInterest,
+          final_settlement_amount: finalSettlementAmount,
+          payment_amount: paymentAmount,
+          previous_paid: currentTotalPaid,
+          total_paid: newTotalPaid,
+          remaining_principal: remainingPrincipal,
+          remaining_interest: remainingInterest,
+          remaining_balance: newRemainingBalance,
+          loan_status: loanStatus
+        },
+        collateral: collateralRows,
+        collateral_release_status: 'PLEDGED',
+        dates: {
+          opened_date: loan.opened_date,
+          payment_date: txDate
+        }
+      };
+
+      const [rcpRes] = await conn.query(
+        `INSERT INTO receipts (receipt_no, receipt_type, reference_id, customer_id, loan_id, receipt_data_json)
+         VALUES (?, 'PAYMENT', ?, ?, ?, ?)`,
+        [paymentReceiptNo, String(paymentId), customerId, loanId, JSON.stringify(receiptData)]
+      );
+      receiptId = rcpRes.insertId;
     }
 
     await conn.query(
@@ -815,14 +960,37 @@ router.post(['/close', '/close.php'], requirePermission('loan.close'), async (re
     await conn.commit();
     conn.release();
 
-    const [freshLoan] = await db.query('SELECT * FROM loans WHERE id = ?', [loanId]);
+    const [freshLoanRows] = await db.query('SELECT * FROM loans WHERE id = ?', [loanId]);
+    const freshLoan = freshLoanRows[0] || {};
+    freshLoan.remaining_principal = remainingPrincipal;
+    freshLoan.remaining_interest = remainingInterest;
 
     return res.json({
       success: true,
       message: isClosed ? 'Loan settled and closed successfully' : 'Settlement payment recorded. Loan remains active.',
       data: {
-        loan: freshLoan[0],
+        transaction_id: paymentId,
+        receipt_id: receiptId,
+        receipt_no: receiptNo,
+        loan_id: loanId,
+        loan_no: loan.loan_no,
+        principal_amount: currentPrincipal,
+        manual_final_interest: appliedManualInterest,
+        total_manual_interest: newManualInterest,
+        current_outstanding: currentOutstandingBefore,
+        final_settlement_amount: finalSettlementAmount,
+        payment_amount: paymentAmount,
+        actual_payment_amount: paymentAmount,
+        total_paid: newTotalPaid,
+        remaining_principal: remainingPrincipal,
+        remaining_interest: remainingInterest,
+        total_remaining_balance: newRemainingBalance,
+        remaining_balance: newRemainingBalance,
+        loan_status: loanStatus,
+        status: loanStatus,
         is_closed: isClosed,
+        collateral_release_status: isClosed ? 'RELEASED' : 'PLEDGED',
+        loan: freshLoan,
         receipt: receiptData
       }
     });
@@ -830,7 +998,7 @@ router.post(['/close', '/close.php'], requirePermission('loan.close'), async (re
   } catch (err) {
     await conn.rollback();
     conn.release();
-    return res.status(500).json({ success: false, message: 'Failed to process loan closure: ' + err.message });
+    return res.status(500).json({ success: false, message: 'Failed to process loan closure: ' + err.message, error: err.message });
   }
 });
 

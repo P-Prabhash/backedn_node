@@ -660,6 +660,17 @@ async function ensureUserColumns(dbPool) {
     } catch (e) {
       // ignore
     }
+
+    // Ensure Loans Columns
+    try {
+      const [loanCols] = await dbPool.query("SHOW COLUMNS FROM loans");
+      const existingLoanCols = loanCols.map(c => c.Field.toLowerCase());
+      if (!existingLoanCols.includes('manual_final_interest')) {
+        await dbPool.query("ALTER TABLE loans ADD COLUMN manual_final_interest DECIMAL(12,2) NOT NULL DEFAULT 0.00 AFTER total_interest");
+      }
+    } catch (e) {
+      // ignore
+    }
   } catch (e) {
     // ignore
   }
